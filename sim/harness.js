@@ -1,15 +1,18 @@
 // Headless Universal Paperclips simulator.
-// Loads the UNMODIFIED game source from src/ into a Node vm context with a fake
-// DOM, virtual-time scheduler, and seedable RNG. Player input is modeled as
-// button clicks: a click only fires if the game itself has the button attached
-// and enabled (buttonUpdate()/manageProjects() manage `disabled` every tick),
-// so action legality is enforced by the game's own logic.
+// Loads the UNMODIFIED game source from src/ as one big function-wrapper
+// closure (no Node `vm` — vm's contextified sandbox intercepts every global
+// variable access through C++, which measured ~1,600 ticks/sec; the plain
+// closure below runs at native V8 speed). Provides a fake DOM, virtual-time
+// scheduler, and seedable RNG. Player input is modeled as button clicks: a
+// click only fires if the game itself has the button attached and enabled
+// (buttonUpdate()/manageProjects() manage `disabled` every tick), so action
+// legality is enforced by the game's own logic.
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
-const vm = require('vm');
 const { mulberry32, Scheduler, FakeDocument, FakeAudio, FakeLocalStorage } = require('./env');
+const { collectPredeclareNames } = require('./scan-globals');
 
 const SRC_DIR = path.join(__dirname, '..', 'src');
 const LOAD_ORDER = ['combat.js', 'globals.js', 'projects.js', 'main.js']; // index2.html order
@@ -44,7 +47,15 @@ const SNAPSHOT_VARS = [
   'prestigeU', 'prestigeS',
 ];
 
-function parseHtmlButtons(html) {
+// Params of the wrapper factory function. `__ids` carries the id->element
+// map for browser "named access" replication (see buildFactory). Names are
+// double-underscore-prefixed to keep them out of scan-globals's shadow.
+const WRAPPER_PARAMS = [
+  'document', 'window', 'localStorage', 'Audio', 'location', 'confirm', 'alert', 'console',
+  'setInterval', 'setTimeout', 'clearInterval', 'clearTimeout', 'Math', '__ids',
+];
+
+function parseHtmlTags(html) {
   // Returns [{tag, attrs}] for every opening tag; tolerant of newlines and
   // `id = "..."` spacing used throughout index2.html.
   const tags = [];
@@ -64,6 +75,72 @@ function parseHtmlButtons(html) {
   return tags;
 }
 
+// Module-level cache: the wrapper source is parsed/compiled once (via
+// indirect eval, so it runs in plain global scope) and reused as a factory
+// function. Each `new Sim()` just *calls* that factory, which is a fresh
+// execution — fresh closure variables — so instances stay fully isolated
+// despite sharing compiled bytecode.
+let cachedFactory = null;
+let cachedSrcDir = null;
+
+function buildFactory(srcDir) {
+  const fileSources = LOAD_ORDER.map((f) => fs.readFileSync(path.join(srcDir, f), 'utf8'));
+  const predeclare = collectPredeclareNames(fileSources);
+
+  const html = fs.readFileSync(path.join(srcDir, 'index2.html'), 'utf8');
+  const IDENT_RE = /^[A-Za-z_$][\w$]*$/;
+  const idNames = new Set();
+  for (const { tag, attrs } of parseHtmlTags(html)) {
+    if (attrs.id && IDENT_RE.test(attrs.id)) idNames.add(attrs.id);
+  }
+
+  // Declare+initialize id-backed names from __ids (browser named access);
+  // predeclare the rest bare. If the game later has its own top-level
+  // `var sameName = ...;` for a name in either group, that's a legal
+  // redeclaration in the same scope — its assignment naturally overwrites
+  // the id-element placeholder in source order, exactly matching real
+  // browser behavior (confirmed collisions in this game: adCost,
+  // batteryCost, batteryLevel are both element ids and state variables).
+  const predeclareOnly = predeclare.filter((n) => !idNames.has(n));
+  const declParts = [];
+  for (const id of idNames) declParts.push(`${id} = __ids[${JSON.stringify(id)}]`);
+  for (const name of predeclareOnly) declParts.push(name);
+
+  let src = `(function(${WRAPPER_PARAMS.join(',')}) {\n"use strict";\n`;
+  if (declParts.length) src += `var ${declParts.join(',')};\n`;
+  for (let i = 0; i < LOAD_ORDER.length; i++) {
+    src += `\n//region ${LOAD_ORDER[i]}\n${fileSources[i]}\n//endregion\n`;
+  }
+  src += '\nreturn {\n';
+  src += '  get: function(__expr){ return eval(__expr); },\n';
+  src += '  set: function(__expr, __val){ return eval(__expr + " = __val"); },\n';
+  src += '  call: function(__code){ return eval(__code); },\n';
+  src += `  snap: function(){ return {${SNAPSHOT_VARS.map((v) => `${v}:${v}`).join(',')}}; }\n`;
+  src += '};\n})';
+
+  // Indirect eval: compiles in global scope, independent of this module's
+  // closure. One-time cost; every `new Sim()` after this just calls the
+  // resulting function.
+  return (0, eval)(src); // eslint-disable-line no-eval
+}
+
+function getFactory(srcDir) {
+  if (cachedFactory && cachedSrcDir === srcDir) return cachedFactory;
+  cachedFactory = buildFactory(srcDir);
+  cachedSrcDir = srcDir;
+  return cachedFactory;
+}
+
+let toLocaleStringPatched = false;
+function patchToLocaleString() {
+  if (toLocaleStringPatched) return;
+  // Display-only in the game but very slow in Node; this is a real,
+  // process-wide mutation of Number.prototype (can't be scoped per-Sim),
+  // so it's applied once and is idempotent.
+  Number.prototype.toLocaleString = function () { return String(this); }; // eslint-disable-line no-extend-native
+  toLocaleStringPatched = true;
+}
+
 class Sim {
   constructor({ seed = 1, fastFormat = true, localStorageData = null, srcDir = SRC_DIR } = {}) {
     this.seed = seed;
@@ -73,65 +150,62 @@ class Sim {
     this.resetRequested = false;
     this.messages = []; // {t, msg} from displayMessage
     this.htmlOnclick = new Map(); // button id -> onclick source string
-    this._clickScripts = new Map(); // id -> vm.Script
+    this._clickFns = new Map(); // id -> compiled closure
 
     this._buildDomFromHtml(path.join(srcDir, 'index2.html'));
 
-    const sandbox = {
-      document: this.document,
-      localStorage: this.localStorage,
-      Audio: FakeAudio,
-      location: { reload: () => { this.resetRequested = true; } },
-      confirm: () => true,
-      alert: () => {},
-      console,
-      setInterval: (fn, ms) => this.scheduler.setInterval(fn, ms),
-      setTimeout: (fn, ms) => this.scheduler.setTimeout(fn, ms),
-      clearInterval: (id) => this.scheduler.clear(id),
-      clearTimeout: (id) => this.scheduler.clear(id),
-      __rng: mulberry32(seed),
-    };
-    sandbox.window = sandbox;
+    if (fastFormat) patchToLocaleString();
 
-    // Browser named access: every element with an id is reachable as a global
-    // variable, unless a script-declared global of the same name exists (var
-    // declarations shadow named access — load order gives the same result here).
-    const IDENT_RE = /^[A-Za-z_$][\w$]*$/;
-    const exposeElement = (el) => {
-      if (IDENT_RE.test(el.id) && !(el.id in sandbox)) sandbox[el.id] = el;
-    };
-    for (const el of this.document._registry.values()) exposeElement(el);
-    this.document._onRegister = exposeElement;
+    const ids = Object.create(null);
+    for (const el of this.document._registry.values()) ids[el.id] = el;
 
-    this.ctx = vm.createContext(sandbox);
-
-    // Must run before game scripts: top-level code calls Math.random /
-    // toLocaleString (e.g. priceTag strings) during load.
-    vm.runInContext('Math.random = __rng;', this.ctx);
-    if (fastFormat) {
-      // toLocaleString is display-only in the game but very slow in Node.
-      vm.runInContext('Number.prototype.toLocaleString = function () { return String(this); };', this.ctx);
+    const rng = mulberry32(seed);
+    const mathShim = Object.create(null);
+    for (const k of Object.getOwnPropertyNames(Math)) {
+      const v = Math[k];
+      mathShim[k] = typeof v === 'function' ? v.bind(Math) : v;
     }
+    mathShim.random = rng;
 
-    for (const file of LOAD_ORDER) {
-      const code = fs.readFileSync(path.join(srcDir, file), 'utf8');
-      vm.runInContext(code, this.ctx, { filename: file });
-    }
-    this.document._loadPhase = false;
+    const simRef = this;
+    const setIntervalShim = (fn, ms) => this.scheduler.setInterval(fn, ms);
+    const setTimeoutShim = (fn, ms) => this.scheduler.setTimeout(fn, ms);
+    const clearIntervalShim = (id) => this.scheduler.clear(id);
+    const clearTimeoutShim = (id) => this.scheduler.clear(id);
+    const windowShim = { setInterval: setIntervalShim }; // only window.setInterval is used in src/
+
+    const factory = getFactory(srcDir);
+    this._api = factory(
+      this.document, windowShim, this.localStorage, FakeAudio,
+      { reload: () => { simRef.resetRequested = true; } },
+      () => true, () => {}, console,
+      setIntervalShim, setTimeoutShim, clearIntervalShim, clearTimeoutShim,
+      mathShim, ids
+    );
+
+    this.ctx = new Proxy({}, {
+      get: (_t, prop) => (typeof prop === 'string' ? this._api.get(prop) : undefined),
+      set: (_t, prop, value) => {
+        if (typeof prop === 'string') this._api.set(prop, value);
+        return true;
+      },
+      has: (_t, prop) => typeof prop === 'string',
+    });
 
     // Capture narrative messages (useful for tests/debugging); keep original behavior.
-    const simRef = this;
-    const origDisplayMessage = this.ctx.displayMessage;
-    this.ctx.displayMessage = function (msg) {
+    const origDisplayMessage = this._api.get('displayMessage');
+    this._api.set('displayMessage', function (msg) {
       simRef.messages.push({ t: simRef.scheduler.now, msg: String(msg) });
       return origDisplayMessage.call(this, msg);
-    };
+    });
+
+    this.document._loadPhase = false;
   }
 
   _buildDomFromHtml(htmlPath) {
     const html = fs.readFileSync(htmlPath, 'utf8');
     let currentSelect = null;
-    for (const { tag, attrs } of parseHtmlButtons(html)) {
+    for (const { tag, attrs } of parseHtmlTags(html)) {
       if (tag === 'script' || tag === 'link' || tag === 'meta') continue;
       let el = null;
       if (attrs.id) {
@@ -166,12 +240,12 @@ class Sim {
     if (typeof el.onclick === 'function') { el.onclick(); return true; }
     const code = this.htmlOnclick.get(id);
     if (!code) return false;
-    let script = this._clickScripts.get(id);
-    if (!script) {
-      script = new vm.Script(code, { filename: `onclick:${id}` });
-      this._clickScripts.set(id, script);
+    let fn = this._clickFns.get(id);
+    if (!fn) {
+      fn = this._api.call(`(function(){${code}})`);
+      this._clickFns.set(id, fn);
     }
-    script.runInContext(this.ctx);
+    fn();
     return true;
   }
   clickProject(n) { return this.click(`projectButton${n}`); }
@@ -184,15 +258,11 @@ class Sim {
     if (!el) throw new Error(`setValue: no element ${id}`);
     el.value = String(value);
   }
-  // Arbitrary expression in game scope (read or call anything).
-  eval(code) { return vm.runInContext(code, this.ctx); }
+  // Arbitrary expression/statement in game scope (read or call anything).
+  eval(code) { return this._api.call(code); }
 
   // --- state ------------------------------------------------------------------
-  snapshot() {
-    const out = {};
-    for (const k of SNAPSHOT_VARS) out[k] = this.ctx[k];
-    return out;
-  }
+  snapshot() { return this._api.snap(); }
 }
 
 module.exports = { Sim, SNAPSHOT_VARS, TICK_MS };
