@@ -1,10 +1,12 @@
-.frame {
+.frame 
+{
     text-align: center;
     margin: auto;
 }
 
 
-img {
+.frame img 
+{
     position: absolute;
     top: 0;
     bottom: 0;
