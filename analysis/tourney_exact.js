@@ -161,4 +161,6 @@ function main() {
   for (const r of rows) console.log(`  ${r.name.padEnd(10)} ${r.mean.toFixed(6)}`);
 }
 
-main();
+module.exports = { exactScoresForGrid, NAMES, N };
+
+if (require.main === module) main();
