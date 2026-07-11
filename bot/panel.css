@@ -1,0 +1,98 @@
+/* Side panel for the autoplay bot. Kept visually distinct (dark) from the
+   game's own light-grey panels so it reads clearly as tooling, not part of
+   the original game UI. */
+#botPanel {
+  float: left;
+  width: 320px;
+  margin-left: 10px;
+  background: #1e1e1e;
+  color: #e0e0e0;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 12px;
+  padding: 10px;
+  box-sizing: border-box;
+  border-radius: 4px;
+}
+
+#botPanel h3 {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  color: #fff;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+#botPanelToggle {
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  background: #444;
+  color: #e0e0e0;
+  border: 1px solid #666;
+  border-radius: 3px;
+}
+#botPanelToggle.running {
+  background: #2d5f2d;
+  border-color: #4a8f4a;
+}
+#botPanelToggle.paused {
+  background: #5f2d2d;
+  border-color: #8f4a4a;
+}
+
+#botTimer {
+  font-size: 20px;
+  font-weight: bold;
+  color: #7fd0ff;
+  margin-bottom: 8px;
+}
+#botTimer .label {
+  font-size: 11px;
+  font-weight: normal;
+  color: #999;
+  display: block;
+}
+
+#botDecision {
+  background: #2a2a2a;
+  border-left: 3px solid #7fd0ff;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  min-height: 48px;
+}
+#botDecision .phase {
+  display: inline-block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #7fd0ff;
+  background: #16313d;
+  padding: 1px 5px;
+  border-radius: 2px;
+  margin-bottom: 4px;
+}
+#botDecision .reason {
+  color: #ccc;
+  line-height: 1.4;
+}
+
+#botLog {
+  max-height: 260px;
+  overflow-y: auto;
+  border-top: 1px solid #444;
+  padding-top: 6px;
+}
+#botLog .entry {
+  padding: 3px 0;
+  border-bottom: 1px solid #2a2a2a;
+  color: #aaa;
+}
+#botLog .entry .t {
+  color: #666;
+  margin-right: 4px;
+}
+#botLog .entry .phase {
+  color: #7fd0ff;
+  margin-right: 4px;
+}
