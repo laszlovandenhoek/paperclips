@@ -167,5 +167,28 @@ console.log('== T10: performance + long smoke test ==');
   console.log(`  final: clips=${Math.floor(c.clips)} funds=${c.funds.toFixed(2)} trust=${c.trust} clippers=${c.clipmakerLevel} ops=${c.standardOps} creat=${Math.floor(c.creativity)}`);
 }
 
+console.log('== T11: real battle can start without crashing ==');
+{
+  // Regression test for a real bug: combat.js's createBattle() calls
+  // `Battle()` WITHOUT `new` (combat.js:783), relying on sloppy-mode `this`
+  // defaulting to the global object. An earlier harness revision wrapped
+  // the game source in "use strict", which turned that into `this ===
+  // undefined` and made every real battle throw a TypeError the instant
+  // drifterCount crossed the war trigger — invisible to every other test
+  // here, since none of them reach stage 3 combat. The wrapper is
+  // deliberately non-strict now; this exercises the exact path that broke.
+  const sim = new Sim({ seed: 8 });
+  sim.tick(1);
+  const c = sim.ctx;
+  c.spaceFlag = 1;
+  c.probeCount = 100;
+  c.drifterCount = 2000000; // > warTrigger (1,000,000)
+  let threw = null;
+  try { sim.eval('createBattle()'); } catch (e) { threw = e; }
+  check('createBattle() does not throw', threw === null, threw && threw.message);
+  check('battle actually registered', sim.eval('battles.length') === 1, `battles.length=${sim.eval('battles.length')}`);
+  check('unitSize set (real combat, not dormant)', sim.eval('unitSize') >= 1, `unitSize=${sim.eval('unitSize')}`);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
