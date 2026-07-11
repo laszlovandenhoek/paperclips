@@ -154,14 +154,17 @@ Forced structure:
 - **D4 — Trust-to-100 composition:** how many of the ~33 non-fixed trust points come from
   clip milestones (need ~fib growth in clips → time) vs Goodwill tokens (money,
   doubling) vs skipping some of the yomi mega-projects (never sensible: +57 trust for
-  22.5k yomi is the cheapest trust in the game — conjecture C2: CEV/Cancer/Peace/Warming/
-  Baldness are in every optimal route).
+  22.5k yomi is the cheapest trust in the game — **C2 resolved by P3 (§4): proven, not
+  conjectured** — CEV/Cancer/Peace/Warming/Baldness are in every optimal route).
 - **D5 — Tournament stack:** which of the 7 strategy unlocks to buy (each +1,000 ops
   tourney cost, more matchups = more yomi & more wall-clock per tournament), Theory of
   Mind (p119, 25k creat: doubles yomi, tourneyCost → 16,000), AutoTourney (p118, 50k
   creat, trust ≥ 90), Strategic Attachment (p128, 175k creat, stage 3: +50k/30k/20k yomi
   per 1st/2nd/3rd-place pick — dominant yomi source lategame, `main.js:2134-2154`),
-  and the pick policy (GREEDY vs field on random payoff grids).
+  and the pick policy. **Resolved by P3 (see §4):** contra the original conjecture,
+  BEATLAST — not GREEDY — dominates as the `pick` selection once all 8 strategies are
+  unlocked, both on raw expected score and on the actual yomi-relevant `score ×
+  beatBoost` metric, computed exactly.
 - **D6 — Compute banking:** stage-1 trust split processors:memory over time
   (`creativitySpeed = log10(p)·p^1.1 + p − 1`, ops regen = 10·p/sec, cap = 1000·m), and
   how much memory to bank for stage-2/3 ops gates vs relying on swarm gifts.
@@ -269,10 +272,76 @@ one archetype with continuous-control optimization remaining.
   (clips, compute, creat, yomi, flags). If for each stage the exit-time is monotone in
   each carried resource, we can optimize stages quasi-independently (dynamic programming
   over the interface state) rather than globally.
-- **P3 — Always-take / never-take lemmas.** E.g.: every wire-supply and clipper-boost
-  upgrade with cost < X ops pays back in T ticks (compute payback bounds); RevTracker is
-  never taken; CEV chain always taken (C2); GREEDY dominates picks in expectation on the
-  uniform payoff grid (compute exactly — 8-strat round-robin is analytically tractable).
+- **P3 — Always-take / never-take lemmas. Done** (`analysis/tourney_exact.js`,
+  `analysis/tourney_montecarlo.js`, `analysis/tourney_yomi.js`):
+  - **Wire-supply / clipper-boost payback bound.** All 12 such upgrades
+    (`projects.js`, projectButton1/4/5/7/8/9/10/10b/16/23/24/25) cost ops only — no
+    creat/yomi/money — and each is a strict prerequisite-gated, permanent,
+    non-negative production multiplier. Ops regen at `10·processors/sec`
+    (`main.js:3437`, `opCycle = processors/10` per 10ms tick), so buying one when
+    affordable delays the next ops gate by exactly `cost/regen` seconds — under the
+    deliberately pessimistic floor `processors=1` (contradicted in practice, since
+    reaching these ops thresholds at all requires trust already spent on
+    processors), the worst-case total delay from taking all 12 is 104,500 ops /
+    10 ops/s ≈ 174 minutes, one-time and front-loaded early. Against that: skipping
+    them buys nothing (the ops "saved" have no alternative use except reaching the
+    *same* G1–G7 gates sooner by the same 174 minutes at the very most, since these
+    projects don't gate anything on the critical path), while taking them
+    permanently raises clip/wire throughput for the remainder of stage 1 — and
+    stage 1 must additionally clear tens of billions of clips in fibonacci-milestone
+    trust if the CEV-chain trust (below) is skipped, i.e. a horizon far longer than
+    174 minutes under any plausible route. **Always take**, in every route that
+    reaches R1-style ops levels at all.
+  - **RevTracker (project42, 500 ops) is never taken — strict dominance, not just a
+    conjecture.** Its only effect is `revPerSecFlag = 1`, which gates exactly one
+    `.style.display` toggle (`main.js:1231-1236`) and nothing else — grepped every
+    reference. Positive cost, provably zero effect on any state variable that
+    matters. Confirms §1's existing "flavor only" classification with a proof, not
+    just an assertion.
+  - **C2 confirmed: CEV → Cure for Cancer → World Peace → Global Warming → Male
+    Pattern Baldness chain is always taken.** Exact costs (`projects.js` p27/28/29/
+    30/31): 500 creat + 22,500 yomi (3,000 + 15,000 + 4,500 — Cancer and Baldness
+    need no yomi) + 145,000 ops → **+58 trust** (1+10+12+15+20). That alone exceeds
+    the ~33 non-fixed trust points any route needs beyond the 67-point fixed
+    baseline (§1), i.e. taking this chain alone can render the *entire* fibonacci
+    clip-milestone trust source unnecessary. The alternative — fibonacci milestones,
+    threshold `fib2×1000`, `fib1=2,fib2=3` — grows at the golden-ratio rate: the
+    20th non-fixed milestone alone needs 28,657,000 clips, the 33rd needs
+    14,930,352,000. Spending 145,000 ops + 22,500 yomi + 500 creat (each comparable
+    to or smaller than a single G1–G7 gate) to avoid ever needing to reach into that
+    exponential tail dominates for any plausible clip-production rate. **Always
+    take.**
+  - **Tournament pick policy — GREEDY does *not* dominate; BEATLAST does.** The
+    original conjecture was wrong. Modeled the full mechanic exactly: 8 strategies
+    (fixed unlock order RANDOM/A100/B100/GREEDY/GENEROUS/MINIMAX/TITFORTAT/BEATLAST
+    — `projects.js` gates each strictly on the previous one's flag, so no other
+    order is reachable), a complete 8×8=64 ordered-pair round-robin including
+    self-play (`pickStrats`, `main.js:1919`), 10 sub-rounds per pairing, and global
+    `hMove(Prev)`/`vMove(Prev)` state that persists *across* pairings (a strategy's
+    first move against a new opponent can depend on the previous opponent's last
+    move) plus a `currentPos` quirk where self-play (h===v) makes a
+    history-dependent strategy see the "v-role" formula for *both* its moves that
+    round. Only RANDOM is stochastic per-move; the rest are deterministic given the
+    (fixed per-tournament) grid and/or move history, which reduces the process to a
+    4-state ((hMovePrev,vMovePrev)) Markov chain — exactly solvable, no sampling,
+    by forward probability propagation over all 10,000 equally-likely integer grids
+    (`aa,ab,ba,bb ∈ {1..10}`, `analysis/tourney_exact.js`). Cross-validated against
+    100,000 Monte Carlo trials driving the *actual* game functions
+    (`pickStrats`/`calcPayoff`/`pickMove` via the simulator,
+    `analysis/tourney_montecarlo.js`) — matches within confidence intervals.
+    Exact E[score], full 8-strategy tournament: BEATLAST 1083.45 > GREEDY 1059.97 >
+    GENEROUS 940.06 > TITFORTAT 898.93 > A100 895.68 > B100 894.85 > RANDOM 880.02 >
+    MINIMAX 852.83. The yomi-relevant quantity is actually `score × beatBoost`
+    (rank-based, `declareWinner`/`calculateStratsBeat`, `main.js:2125` /
+    `main.js:2169`), computed via 100,000-trial Monte Carlo on the real game code
+    (`analysis/tourney_yomi.js`): BEATLAST 5507 ± 13 vs. GREEDY 5314 ± 16 (95% CI,
+    non-overlapping) — BEATLAST wins by ~3.6%, consistently. Curiously, BEATLAST's
+    *outright*-tournament-win rate is 0.0% (it is extremely consistently 2nd/3rd,
+    never 1st) while GREEDY wins outright 18.1% of the time — high consistency beats
+    high ceiling here because yomi is rank-weighted, not winner-take-all.
+    **Always pick BEATLAST**, once unlocked, in any route running the full 8-strategy
+    round-robin. (Whether to unlock all 7 strategies at all — the tourneyCost-vs-yomi
+    tradeoff — is a separate, still-open D5 question for P4.)
 - **P4 — Axis winners.** Sim-based A/B per axis (D2, D3, D5, D6, D7, D9/D10) holding the
   rest at R1 defaults, then check for cross-terms between surviving variants.
 - **P5 — Continuous-control optimization** inside the surviving route: greedy/LP bounds
