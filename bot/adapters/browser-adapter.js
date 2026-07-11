@@ -14,6 +14,27 @@
 
   var MIN_CLICK_INTERVAL_MS = 1000 / 30;
 
+  // See the matching comment in sim-adapter.js: several sections (tournament
+  // UI, investment engine, megaclippers, ...) are gated purely by
+  // `el.style.display = "none"`/`""` on a CONTAINER, not by disabling the
+  // button - a `.disabled`-only check clicks buttons a real player couldn't
+  // see yet. Walk up parentNode checking inline style, matching how the game
+  // actually toggles visibility (confirmed: it never uses CSS classes for
+  // this, only direct .style.display/.style.visibility assignment) - kept
+  // identical to sim-adapter.js's version rather than using offsetParent, so
+  // both adapters agree exactly on what's clickable.
+  function isVisible(el) {
+    var node = el;
+    while (node) {
+      if (node.style) {
+        if (node.style.display === 'none') return false;
+        if (node.style.visibility === 'hidden') return false;
+      }
+      node = node.parentNode;
+    }
+    return true;
+  }
+
   function BrowserAdapter(win) {
     this.win = win || window;
     this.doc = this.win.document;
@@ -26,7 +47,8 @@
 
   BrowserAdapter.prototype.isClickable = function (id) {
     var el = this.doc.getElementById(id);
-    return !!el && !el.disabled;
+    if (!el || el.disabled) return false;
+    return isVisible(el);
   };
 
   BrowserAdapter.prototype.click = function (id) {

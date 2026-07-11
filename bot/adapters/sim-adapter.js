@@ -8,6 +8,28 @@
 
 const MIN_CLICK_INTERVAL_MS = 1000 / 30;
 
+// Several sections of the page (tournament UI, investment engine, megaclippers,
+// etc.) are gated purely by `el.style.display = "none"`/`""` on a CONTAINER
+// element - NOT by disabling the button itself (main.js:1198-1206 is a typical
+// example: strategyEngineFlag gates strategyEngineElement/tournamentManagement
+// Element's display, while btnNewTournament/btnRunTournament's `.disabled` is
+// managed separately, or not at all). A `.disabled`-only isClickable() check
+// misses this entirely and will click buttons a real player couldn't even see
+// yet - confirmed in practice: the bot was running tournaments before
+// Strategic Modeling was purchased. Walk up parentNode checking every
+// ancestor's inline style, matching how the game actually toggles visibility.
+function isVisible(el) {
+  let node = el;
+  while (node) {
+    if (node.style) {
+      if (node.style.display === 'none') return false;
+      if (node.style.visibility === 'hidden') return false;
+    }
+    node = node.parentNode;
+  }
+  return true;
+}
+
 class SimAdapter {
   constructor(sim) {
     this.sim = sim;
@@ -20,7 +42,8 @@ class SimAdapter {
 
   isClickable(id) {
     const el = this.sim.document.getElementById(id);
-    return !!el && !el.disabled;
+    if (!el || el.disabled) return false;
+    return isVisible(el);
   }
 
   click(id) {

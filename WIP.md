@@ -198,6 +198,66 @@ price-matching only touches stage-1 policy, not the simulator itself), headless 
 run to 3,600s clean, and a longer background stability run in progress at time of
 writing.
 
+### Two more real bugs found by the user watching it play (done, follow-up session)
+
+Both caught by observation, not code reading — exactly the value of actually running
+this thing.
+
+**1. Creativity (and projects generally) were being starved by routine purchases.**
+The user asked "is there logic to buy Creativity as soon as possible?" — there was,
+but it wasn't getting a turn. Generic project purchase (step 8) was *below* the
+routine autoclipper/megaclipper/marketing purchases (step 4) in priority, and since
+those are near-always affordable once any funds are flowing, they perpetually
+preempted one-time gateway projects. Measured directly: Creativity became affordable
+at t=286.8s in one run but wasn't bought until t=483.7s — a 3.3-minute stall on the
+project that unlocks the entire rest of the tech tree. Fix: moved generic project
+purchase to right after the wire hard-gate (now step 4), ahead of the routine $
+purchases. Safe to reorder — projects spend ops, not funds, so there's no shared
+resource with the economy purchases to starve. Verified: same scenario now buys
+Creativity 100ms after it's affordable (next decision cycle).
+
+**2. Tournaments were running before Strategic Modeling was bought.** The user spotted
+this directly. Root cause: the tournament UI section is hidden purely via
+`el.style.display = "none"` on a *container* div (`main.js:1198-1206`,
+`strategyEngineFlag` gates `strategyEngineElement`/`tournamentManagementElement`) —
+the buttons themselves are never `.disabled`. `isClickable()` in both adapters only
+checked `.disabled`, so it happily clicked buttons a real player couldn't even see
+yet. Fixed by adding an `isVisible()` ancestor-chain walk (checking
+`style.display`/`style.visibility` up the parent chain) to both adapters.
+
+That fix immediately exposed a second, deeper bug it depends on: **the simulator's
+HTML→DOM builder didn't build a real tree at all** — every element, regardless of its
+actual nesting in index2.html, ended up a flat direct child of `<body>`
+(`sim/harness.js`'s old `_buildDomFromHtml`/`parseHtmlTags` never tracked open/close
+tags, just registered every id'd tag under body). An ancestor-walk visibility check is
+meaningless against a flat tree. Rewrote the HTML parsing as a proper tokenizer
+(`tokenizeHtml()`: open/close/self-close tokens, void-element list, comment-stripping —
+the old parser also had no comment awareness and would have registered ids from
+index2.html's several commented-out debug/cheat blocks) and `_buildDomFromHtml` as a
+stack-based tree builder. Hit one more layer while wiring this up:
+`document.getElementById()` has a `_loadPhase` tolerance fallback (auto-creates any
+missing id as a flat body-child, meant for ids the original flat HTML parse might have
+missed) that fires on *every* id's first occurrence during the new builder's own
+parse, since nothing is registered yet at that point — silently defeating the new
+nesting logic before it could run. Fixed by reading `document._registry` directly
+during the build instead of going through `getElementById`.
+
+Verified: confirmed `btnNewTournament`'s ancestor chain now correctly resolves through
+`tournamentManagement`/`strategyEngine` up to `body` (was `[button, body]` flat before
+either fix, still flat after only the adapter fix, correct after the harness fix
+too — each layer of this bug was necessary to find before the next was visible).
+`sim/validate.js` still 37/37 throughout. Direct test: tournament no longer clicks
+before `project20.flag` (Strategic Modeling) is set. Headless run to 7,200s clean,
+reaching trust=13 by 19 simulated minutes — faster still than the price-matching-only
+run (trust=9 at 29 minutes), since ops that used to go toward starved projects now
+land immediately. Re-verified clean in the real browser via Playwright (no console
+errors, real progress) after all of the above.
+
+**Not yet done / known gaps, updated:** the "not yet done" list above is otherwise
+unchanged (wire purchase timing, D6/D8/D9/D10 placeholders, D4 fibonacci-vs-token mix,
+stage 2/3/endgame still unexercised) — these two fixes were priority-ordering and
+adapter-correctness bugs, not policy-completeness gaps.
+
 ### Performance: two rounds, ~48× total (1,600 → 77,991 ticks/sec)
 
 **Round 1 — eliminate `vm`.** Node `vm` contextified sandboxes intercept every global

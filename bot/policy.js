@@ -243,7 +243,32 @@
       return act(adapter, 'btnBuyWire', 'economy', 'Restocking wire (below 100 inches buffer).');
     }
 
-    // 4. Core stage-1 economy purchases: autoclippers, megaclippers, marketing.
+    // 4. Generic project purchase: trigger-gating in projects.js already
+    // sequences the tech tree correctly, so "buy whatever is currently
+    // affordable" gets almost the whole game right for free. Explicit
+    // exceptions: RevTracker (never-take, P3) and Accept (never - handled
+    // by Reject's priority above; skip here so we don't race a
+    // simultaneously-available Reject on some future call ordering).
+    // Ahead of the routine economy purchases below (autoclippers etc.) -
+    // confirmed by running it that placing this AFTER them (the original
+    // order) let repeatable, marginal $ purchases perpetually preempt
+    // one-time, ops-gated gateway projects: Creativity became affordable at
+    // t=286.8s in one run but wasn't bought until t=483.7s, a ~3.3 minute
+    // stall on a project that unlocks the entire rest of the tech tree.
+    // Projects spend ops, not funds, so promoting them here doesn't reopen
+    // the wire-deadlock risk above - there's no shared resource to starve.
+    var activeProjects = g('activeProjects') || [];
+    for (var i = 0; i < activeProjects.length; i++) {
+      var proj = activeProjects[i];
+      if (!proj || !proj.element || proj.element.disabled) continue;
+      if (NEVER_TAKE_PROJECTS.indexOf(proj.id) !== -1) continue;
+      if (proj.id === ACCEPT_ID) continue;
+      return act(adapter, proj.id, 'project',
+        'Buying project: ' + (proj.title || proj.id) +
+        ' (generic rule - trigger-gating already sequences the tree; see NEVER_TAKE_PROJECTS for exceptions).');
+    }
+
+    // 5. Core stage-1 economy purchases: autoclippers, megaclippers, marketing.
     // These are NOT projects (not in activeProjects) - always-available
     // buttons with their own escalating cost, must be handled explicitly.
     // Naive: buy whenever affordable, no payback-time comparison yet between
@@ -266,7 +291,7 @@
       }
     }
 
-    // 5. Bootstrap manual clicking before autoclippers are doing the work
+    // 6. Bootstrap manual clicking before autoclippers are doing the work
     // (or whenever nothing above was affordable this cycle - manual clicks
     // are how the very first purchase gets funded at all).
     if (humanFlag === 1 && g('clipmakerLevel') < 5 && g('wire') >= 1 && adapter.isClickable('btnMakePaperclip')) {
@@ -275,7 +300,7 @@
         g('clipmakerLevel') + ').');
     }
 
-    // 6. Tournament: adaptive grid-aware pick (P3). btnRunTournament is only
+    // 7. Tournament: adaptive grid-aware pick (P3). btnRunTournament is only
     // enabled in the "grid generated, waiting for a pick+run" window
     // (newTourney() enables it, runTourney() disables it for the rest of the
     // automatic 64-pairing chain) - a clean game-state signal, no bot-side
@@ -306,7 +331,7 @@
       return act(adapter, 'btnNewTournament', 'tournament', 'Starting a new tournament round.');
     }
 
-    // 7. Processor/memory allocation. Naive 1:1 split - D6 (compute banking)
+    // 8. Processor/memory allocation. Naive 1:1 split - D6 (compute banking)
     // is explicitly still open in ROUTES.md, including the just-added finding
     // that creativity only accrues while operations>=memory*1000, so more
     // memory without more processors lengthens the post-purchase dead zone.
@@ -319,23 +344,6 @@
           'Allocating spare trust to ' + (wantProc ? 'processors' : 'memory') +
           ' (naive 1:1 split - D6 still open).');
       }
-    }
-
-    // 8. Generic project purchase: trigger-gating in projects.js already
-    // sequences the tech tree correctly, so "buy whatever is currently
-    // affordable" gets almost the whole game right for free. Explicit
-    // exceptions: RevTracker (never-take, P3) and Accept (never - handled
-    // by Reject's priority above; skip here so we don't race a
-    // simultaneously-available Reject on some future call ordering).
-    var activeProjects = g('activeProjects') || [];
-    for (var i = 0; i < activeProjects.length; i++) {
-      var proj = activeProjects[i];
-      if (!proj || !proj.element || proj.element.disabled) continue;
-      if (NEVER_TAKE_PROJECTS.indexOf(proj.id) !== -1) continue;
-      if (proj.id === ACCEPT_ID) continue;
-      return act(adapter, proj.id, 'project',
-        'Buying project: ' + (proj.title || proj.id) +
-        ' (generic rule - trigger-gating already sequences the tree; see NEVER_TAKE_PROJECTS for exceptions).');
     }
 
     // 9. Price matching: set margin so expected sales volume tracks
