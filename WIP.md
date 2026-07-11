@@ -258,6 +258,75 @@ unchanged (wire purchase timing, D6/D8/D9/D10 placeholders, D4 fibonacci-vs-toke
 stage 2/3/endgame still unexercised) — these two fixes were priority-ordering and
 adapter-correctness bugs, not policy-completeness gaps.
 
+### Speedrun target + investment/quantum engines + two more real bugs (this session)
+
+**Target set:** researched the Universal Paperclips speedrun.com leaderboard (API
+endpoints, since direct page fetches 403 through Cloudflare) and a community strategy
+guide (zurd.ca). Any% Desktop world record — matching our `src/` version — is **5,662
+seconds** (1h34m22s) real-time. That's the number our simulator's total elapsed time
+needs to beat.
+
+**Investment engine and quantum computing usage added** (`bot/policy.js` steps 5, 7,
+11). `investDeposit()`/`investWithdraw()` are all-or-nothing (main.js:1454-1471, no
+partial-deposit control) — required splitting the logic across two non-adjacent
+priority steps: withdraw/risk-level/upgrade early (step 5, so pending purchases can
+always get funded), deposit late (step 7, after routine economy purchases already had
+first claim on `funds` that cycle). Quantum computing (step 11) clicks `btnQcompute`
+when the aggregate photonic-chip signal is close to its per-chip max and there's ops
+headroom below the memory cap to actually bank the gain.
+
+**Two more real bugs found and fixed, both via headless runs, both root-caused by
+comparing against nonexistent or stale state — same lesson as the two bugs in the
+section above, that reading main.js's mechanics precisely (not just approximately)
+matters:**
+
+1. **Risk-level readback compared against a nonexistent global.** The `investStrat`
+   `<select>`'s applied value only exists as `investStratElement.value` (a DOM element
+   property, not window-scoped) — the real applied setting is the `riskiness` global,
+   synced from the select by a 100ms timer (main.js:1619-1625). `g('investStrat')`
+   always read `undefined`, so the desired-vs-actual comparison never matched and the
+   risk-level click fired on effectively *every* `decide()` call once `clips>=100000` —
+   starving every lower-priority step (deposits, autoclipper purchases) for the rest of
+   the run. Caught by a 53+ simulated-hour background run stalled at trust=29 with $44M
+   of unspent funds. Fixed by comparing against `riskiness` directly (mapped from the
+   desired risk string) instead of the phantom global.
+
+2. **Stage-2 (post-HypnoDrones "Earth-consumption era") build order spent the entire
+   ~$832M `unusedClips` stockpile carried over from stage 1 on solar farms/batteries
+   before a single Factory — the *only* building that produces clips (`clipClick()` is
+   only called with `factoryLevel*factoryRate`, main.js:4281; harvesters/wire drones
+   just convert matter to wire, farms/batteries just supply the power factories need to
+   run) — could ever be bought.** Two compounding causes: (a) a one-tick display lag
+   at the exact `humanFlag` transition let farm/battery's containers read visible
+   before `btnMakeFactory`'s did, so the naive fixed-priority list's "first affordable"
+   button that tick was farm, not factory, and one lucky tick was enough to buy 2 farms
+   (the 2nd alone cost $686M, `Math.pow(farmLevel+1,2.78)*1e8`); (b) `btnMakeFactory` is
+   also gated behind an ops-timed unlock chain (project45 "Clip Factories" requires
+   project43 "Harvester Drones" AND project44 "Wire Drones" first, projects.js:990-1054)
+   that isn't available instantly post-transition — a naive fallback of "keep buying
+   whatever's affordable" kept re-buying farms while genuinely waiting on that chain to
+   unlock. Caught by a headless run that entered stage 2 at t=9,835s and then flatlined
+   (0 factories, 0 clip growth) for 20,000+ more simulated seconds. Fixed by
+   bootstrapping minimal power infra (1 farm + 1 battery, ~$11M) then explicitly
+   checking the unlock flags (`harvesterFlag`/`wireDroneFlag`/`factoryFlag`) and
+   waiting rather than falling through to more farm purchases, then — once
+   unlocked — keeping power supply just ahead of demand (farmRate=50 vs
+   factoryPowerRate=200, so each factory needs ~4x a farm's output) and harvester/wire
+   drone levels balanced, prioritizing factories over further farm/battery growth.
+   Verified: stage 2 now reaches factoryLevel=6 with harvester/wireDrone in the
+   thousands (kept within 1 of each other) and clips growing exponentially
+   (8.2×10^15 by t=28,200s post-transition, vs. permanent flatline before the fix).
+
+**Net effect on a from-scratch headless run (seed 1):** trust reaches 100 and
+HypnoDrones releases (stage 1 → stage 2 transition) at ~t=9,840s (2.7 simulated hours),
+vs. the pre-session baseline never getting anywhere near token-funded trust (stuck
+around trust=33 after 25+ simulated hours, per the "Where we are" baseline diagnosis).
+Stage 2 has not yet been run to completion (space transition) in this session — next
+step is verifying that, then implementing real stage-3 probe/combat logic (still the
+old naive fixed-priority placeholder — combat > hazard > speed > nav > rep > fac > harv
+stat order, no OQ3/C3 resolution), then measuring total time-to-credits against the
+5,662s target.
+
 ### Performance: two rounds, ~48× total (1,600 → 77,991 ticks/sec)
 
 **Round 1 — eliminate `vm`.** Node `vm` contextified sandboxes intercept every global
@@ -321,23 +390,40 @@ No particular order implied; whichever the user wants to pick up.
    fought honor), OQ1 (quantum tempOps bypassing memory gates), OQ3 (maxTrust-20
    finish feasibility).
 
-**Bot policy iteration** (see "known gaps" in the Autoplay bot section, and the
-price-matching section, above for the full list; roughly in expected-impact order):
-1. ~~Price matching~~ — done, see above. Sale-price (`margin`) now tracks production
-   automatically; the remaining wire-related gap is *purchase*-side: exploiting the
-   sine-wave `wireCost` formula (already derived in ROUTES.md's continuous-controls
-   note) to buy wire when it's cheap, rather than the current "buy whenever affordable
-   and below buffer" — smaller expected win now that price-matching is already
-   accelerating the economy.
-2. Smarter economy allocation between wire/clippers/megaclippers/marketing (currently:
+**Bot policy iteration — now explicitly aimed at beating the 5,662s (1h34m22s) Any%
+Desktop world record** (see the "Speedrun target" section above for how that number was
+sourced; see "known gaps" in the Autoplay bot section, and the price-matching section,
+above for earlier-session gaps still open):
+1. ~~Price matching~~ — done. Sale-price (`margin`) now tracks production automatically;
+   the remaining wire-related gap is *purchase*-side: exploiting the sine-wave
+   `wireCost` formula (already derived in ROUTES.md's continuous-controls note) to buy
+   wire when it's cheap, rather than the current "buy whenever affordable and below
+   buffer" — smaller expected win now that price-matching is already accelerating the
+   economy.
+2. ~~Investment engine + quantum computing~~ — done this session, see above. Trust now
+   reaches 100 (token-funded, not just fibonacci milestones) at ~t=9,840s instead of
+   stalling around trust=33 after 25+ simulated hours.
+3. ~~Stage-2 build order~~ — done this session, see above. Was flatlining at
+   factoryLevel=0 forever; now reaches factoryLevel=6+ with balanced
+   harvester/wireDrone growth and exponential clip output. **Not yet verified to run to
+   completion** (space transition) — next immediate step.
+4. **Stage-3 probe/combat policy — still the old naive fixed-priority placeholder**
+   (combat > hazard > speed > nav > rep > fac > harv stat allocation order, launch
+   probes whenever affordable, no real strategy). Per ROUTES.md: 30 solar farms for
+   Momentum, ~900k harvester/wire drones, storage cap 30M MW-s, swarm slider tuning for
+   stage 2; Elliptic Hull Polytopes ASAP, probe stats mostly self-replication with some
+   combat, honor target ~91,117.99 via specific projects, avoid AutoTourney/OODA
+   Loop/Glory/late Threnody, guard against `unusedClips` hitting 0 for stage 3. Not
+   started — this is very likely the largest remaining gap versus a real speedrun.
+5. Smarter economy allocation between wire/clippers/megaclippers/marketing (currently:
    whichever's affordable, in a fixed priority order with wire gated first to avoid the
    deadlock described above) — real payback-time comparisons instead of "buy whenever
    affordable."
-3. Run the policy far enough (the price-matching win from this session should help
-   directly) to exercise stage 2, stage 3, and the endgame for the first time — none of
-   that code path has been tested yet, only stage 1.
-4. Processors:memory split (currently naive 1:1), stage-2 build ratios, stage-3 probe
-   stat allocation — all explicitly placeholder per the D6/D8/D9/D10 open questions.
+6. Processors:memory split (now targets 6 processors then memory to a 25 cap, still a
+   guess informed by the community guide, not derived), stage-3 probe stat allocation —
+   still explicitly placeholder per the D6/D8/D9/D10 open questions.
+7. Once stage 2 → stage 3 → credits runs end-to-end, measure total elapsed time and
+   compare against 5,662s; iterate whichever stage dominates the gap.
 
 ## Repo state
 
