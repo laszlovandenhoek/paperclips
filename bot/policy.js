@@ -184,11 +184,24 @@
     return Math.pow(ratePerSec / SALES_COEFFICIENT, 1 / SALES_EXPONENT);
   }
 
-  // Naive stage-2 build order: whichever of these is currently affordable,
-  // in this fixed priority order. No attempt yet at balancing ratios (e.g.
-  // the drone:harvester ratio ceiling mentioned in ROUTES.md) - placeholder
-  // for a future iteration.
-  var STAGE2_BUILDINGS = ['btnMakeFactory', 'btnMakeHarvester', 'btnMakeWireDrone', 'btnMakeFarm', 'btnMakeBattery'];
+  // Stage-2 build order. Only factories produce clips (clipClick() is only
+  // called with factoryLevel*factoryRate, main.js:4281); harvesters/wire
+  // drones just convert matter into wire for factories to consume, and
+  // farms/batteries just supply the power factories need to run
+  // (powMod = supply/demand, zero if farmLevel=0 - main.js:2952-3000). A
+  // flat priority list (factory > harvester > wireDrone > farm > battery)
+  // looked right but had a real bootstrap bug: on the exact tick humanFlag
+  // flips to 0, btnMakeFactory's container can still read display:none for
+  // one more buttonUpdate() cycle while farm/battery's containers (gated by
+  // a different flag) are already visible - so the "first affordable"
+  // button that tick was farm, not factory. That one lucky tick was enough
+  // to buy 2 farms (a farm's cost is Math.pow(farmLevel+1,2.78)*1e8 - the
+  // 2nd one alone cost $686M) before factory's container ever unhid,
+  // permanently draining the ~$832M of unusedClips carried over from stage
+  // 1 - none left for a single $100M factory, the only thing that produces
+  // more. Caught via headless run: stage 2 entered at t=9835s and then
+  // flatlined for 20,000+ simulated seconds with 0 factories.
+  var STAGE2_BUILDING_ORDER = ['btnMakeFactory', 'btnMakeHarvester', 'btnMakeWireDrone', 'btnMakeFarm', 'btnMakeBattery'];
 
   // Naive stage-3 probe stat priority: combat first (mandatory per ROUTES.md
   // G-gates - drifter casualties scale with probeCombat^1.7, probeCombat=0
@@ -199,6 +212,8 @@
     'btnRaiseProbeCombat', 'btnRaiseProbeHaz', 'btnRaiseProbeSpeed',
     'btnRaiseProbeNav', 'btnRaiseProbeRep', 'btnRaiseProbeFac', 'btnRaiseProbeHarv',
   ];
+
+  var AUTOCLIPPER_CAP = 75; // community speedrun guide; referenced by both the investment withdraw check and the purchase cap below
 
   function decide(adapter) {
     var g = function (name) { return adapter.get(name); };
@@ -268,11 +283,93 @@
         ' (generic rule - trigger-gating already sequences the tree; see NEVER_TAKE_PROJECTS for exceptions).');
     }
 
-    // 5. Core stage-1 economy purchases: autoclippers, megaclippers, marketing.
+    // 5. Investment engine (unlocked by project21, "Algorithmic Trading",
+    // trust>=8 - itself just bought by the generic rule above, nothing
+    // special needed there). Research from the speedrunning community
+    // (community strategy guide, see WIP.md) flagged this as "where the
+    // problem of the game for a good speedrun lies" - highest-variance part
+    // of the run - but also as the main funding source for the trust-via-
+    // tokens path (below) once trust>=85, so it's worth running even simply.
+    // stockShop()/sellStock()/updateStocks() are all automatic once bankroll
+    // has funds (main.js:1666-1686, timers) - our only levers are how much
+    // to keep deposited, the risk level, and when to withdraw for a
+    // purchase.
+    if (humanFlag === 1 && adapter.isClickable('btnInvest')) {
+      var bankroll = g('bankroll');
+      var fundsNow = g('funds');
+
+      // Withdraw if it would clear a big-ticket funds-gated purchase.
+      // Buffers per the community guide: don't cash out right at the
+      // threshold (leaves nothing invested for next time) - keep a 2x
+      // buffer for the huge one-time projects, no buffer needed for tokens
+      // or the routine autoclipper/megaclipper/marketing purchases (small
+      // relative to the engine's balance, and recurring - the whole point
+      // of running this engine is to fund them, not just the mega-projects).
+      // Without this, once step 7 starts sweeping funds to bankroll every
+      // cycle, `funds` alone would never again reach megaClipperCost/adCost
+      // (only bankroll grows) - only a matching withdraw check unstuck it.
+      var withdrawThreshold = null;
+      function considerThreshold(t) { if (t !== null && (withdrawThreshold === null || t < withdrawThreshold)) withdrawThreshold = t; }
+      var project37 = g('project37'); // Hostile Takeover, $1,000,000
+      var project38 = g('project38'); // Full Monopoly, $10,000,000 (needs project37 first)
+      var project40 = g('project40'); // A Token of Goodwill, $500,000
+      var project40b = g('project40b'); // Another Token of Goodwill, doubles from $1,000,000
+      if (project37 && !project37.flag) considerThreshold(1000000 * 2);
+      else if (project37 && project37.flag && project38 && !project38.flag) considerThreshold(10000000 * 2);
+      if (project40 && !project40.flag) considerThreshold(500000);
+      if (project40 && project40.flag && project40b && !project40b.flag && g('trust') < 100) considerThreshold(g('bribe'));
+      if (g('clipmakerLevel') < AUTOCLIPPER_CAP) considerThreshold(g('clipperCost'));
+      considerThreshold(g('megaClipperCost'));
+      considerThreshold(g('adCost'));
+      if (withdrawThreshold !== null && bankroll > 0 && fundsNow + bankroll >= withdrawThreshold) {
+        return act(adapter, 'btnWithdraw', 'invest',
+          'Withdrawing $' + bankroll.toFixed(0) + ' - clears a pending purchase needing $' + withdrawThreshold.toFixed(0) + '.');
+      }
+
+      // Risk level: med until clips are flowing well, then high (community
+      // guide's timing heuristic - "shifting to High Risk around 100,000
+      // clips" - used as a simple readable proxy for "economy is established").
+      // Read back via `riskiness` (main.js:1433), not a nonexistent
+      // `investStrat` global - the select's value only exists as
+      // investStratElement.value (a DOM element property, not window-scoped),
+      // synced into `riskiness` by a 100ms timer (main.js:1619-1625). Reading
+      // g('investStrat') always returned undefined, so this comparison never
+      // matched and the click fired on every single decide() call forever
+      // once clips>=100000 - starving every lower-priority step (deposits,
+      // autoclipper purchases) for the rest of the run. Caught by a stalled
+      // headless run: trust stuck at 29 with $44M of unspent funds after 53+
+      // simulated hours.
+      var desiredRisk = g('clips') >= 100000 ? 'hi' : 'med';
+      var desiredRiskiness = desiredRisk === 'hi' ? 1 : 5;
+      if (g('riskiness') !== desiredRiskiness) {
+        return actSetValue(adapter, 'investStrat', desiredRisk, 'invest',
+          'Setting risk level to ' + desiredRisk + ' (clips=' + Math.floor(g('clips')) + ').');
+      }
+
+      // Upgrade (raises stockGainThreshold, i.e. win probability) whenever
+      // affordable - lower priority than withdrawing capital when needed.
+      if (adapter.isClickable('btnImproveInvestments')) {
+        return act(adapter, 'btnImproveInvestments', 'invest', 'Upgrading investment engine (raises trade win rate).');
+      }
+      // Deposits are handled separately, AFTER the routine economy
+      // purchases below (step 6) - investDeposit() moves ALL of funds into
+      // bankroll in one shot (main.js:1454-1461, no partial-deposit
+      // control), so depositing here (before those purchases get a chance
+      // to spend what they need) would starve them the same way the
+      // project-purchase-ordering bug did earlier. Giving economy purchases
+      // first claim on `funds` each cycle, then sweeping whatever's left,
+      // avoids that without needing a hand-tuned "keep this much liquid"
+      // buffer that would go stale as costs scale up.
+    }
+
+    // 6. Core stage-1 economy purchases: autoclippers, megaclippers, marketing.
     // These are NOT projects (not in activeProjects) - always-available
     // buttons with their own escalating cost, must be handled explicitly.
-    // Naive: buy whenever affordable, no payback-time comparison yet between
-    // the three (placeholder - P5-level continuous-control optimization).
+    // AutoClippers capped at 75 per the community speedrun guide (each
+    // additional one past that point earns less than the same funds put
+    // toward MegaClippers/Marketing/investment) - beyond the cap, skip
+    // straight to MegaClipper/Marketing. No payback-time comparison between
+    // MegaClipper vs Marketing yet (placeholder - P5-level optimization).
     // Priority ABOVE bootstrap clicking below: getting the first autoclipper
     // running matters far more than one more manual click, and putting this
     // after bootstrap would starve it forever, since the bootstrap condition
@@ -280,8 +377,8 @@
     // Skipped entirely during a wire shortage (see above) so cheap purchases
     // can't keep funds from ever reaching wireCost.
     if (humanFlag === 1 && !wireShortage) {
-      if (adapter.isClickable('btnMakeClipper')) {
-        return act(adapter, 'btnMakeClipper', 'economy', 'Buying an AutoClipper.');
+      if (g('clipmakerLevel') < AUTOCLIPPER_CAP && adapter.isClickable('btnMakeClipper')) {
+        return act(adapter, 'btnMakeClipper', 'economy', 'Buying an AutoClipper (below the 75 cap).');
       }
       if (adapter.isClickable('btnMakeMegaClipper')) {
         return act(adapter, 'btnMakeMegaClipper', 'economy', 'Buying a MegaClipper.');
@@ -291,7 +388,17 @@
       }
     }
 
-    // 6. Bootstrap manual clicking before autoclippers are doing the work
+    // 7. Investment deposit: sweep whatever funds economy purchases (and
+    // wire, and any project just bought) didn't need this cycle into the
+    // investment engine, rather than leaving it idle. Split from the
+    // withdraw/risk/upgrade logic in step 5 - see the comment there for why
+    // (investDeposit() takes everything in one shot, no partial control).
+    if (humanFlag === 1 && !wireShortage && adapter.isClickable('btnInvest') && g('funds') > 0) {
+      return act(adapter, 'btnInvest', 'invest',
+        'Depositing $' + g('funds').toFixed(0) + ' into the investment engine (nothing more urgent to spend it on this cycle).');
+    }
+
+    // 8. Bootstrap manual clicking before autoclippers are doing the work
     // (or whenever nothing above was affordable this cycle - manual clicks
     // are how the very first purchase gets funded at all).
     if (humanFlag === 1 && g('clipmakerLevel') < 5 && g('wire') >= 1 && adapter.isClickable('btnMakePaperclip')) {
@@ -300,7 +407,7 @@
         g('clipmakerLevel') + ').');
     }
 
-    // 7. Tournament: adaptive grid-aware pick (P3). btnRunTournament is only
+    // 9. Tournament: adaptive grid-aware pick (P3). btnRunTournament is only
     // enabled in the "grid generated, waiting for a pick+run" window
     // (newTourney() enables it, runTourney() disables it for the rest of the
     // automatic 64-pairing chain) - a clean game-state signal, no bot-side
@@ -331,22 +438,56 @@
       return act(adapter, 'btnNewTournament', 'tournament', 'Starting a new tournament round.');
     }
 
-    // 8. Processor/memory allocation. Naive 1:1 split - D6 (compute banking)
-    // is explicitly still open in ROUTES.md, including the just-added finding
-    // that creativity only accrues while operations>=memory*1000, so more
-    // memory without more processors lengthens the post-purchase dead zone.
-    // Placeholder pending a real P4 A/B on the schedule.
+    // 10. Processor/memory allocation. Community speedrun guide's schedule:
+    // get processors up to 6 first (unlocks quantum computing at
+    // processors>=5, project50), then put everything else into memory,
+    // topping out around 25 processors by the end of stage 1 (rest memory,
+    // needed for the 70k/120k ops gates - G5/G14 in ROUTES.md). D6 (compute
+    // banking) is otherwise still open, including the earlier finding that
+    // creativity only accrues while operations>=memory*1000, so this
+    // schedule is a concrete guess informed by that research, not yet a
+    // from-scratch derivation of our own.
+    var PROCESSOR_TARGET = 25;
     if (g('trust') > g('processors') + g('memory')) {
-      var wantProc = g('processors') <= g('memory');
+      var wantProc = g('processors') < 6 || (g('processors') < PROCESSOR_TARGET && g('processors') <= g('memory') / 10);
       var procId = wantProc ? 'btnAddProc' : 'btnAddMem';
       if (adapter.isClickable(procId)) {
         return act(adapter, procId, 'compute',
           'Allocating spare trust to ' + (wantProc ? 'processors' : 'memory') +
-          ' (naive 1:1 split - D6 still open).');
+          ' (target: 6 processors early to unlock quantum computing, ~25 total by end of stage 1, rest memory).');
       }
     }
 
-    // 9. Price matching: set margin so expected sales volume tracks
+    // 11. Quantum computing: bonus ops from clicking qComp() at good times
+    // (main.js:829-864). Each active photonic chip contributes
+    // sin(qClock*waveSeed) - different waveSeeds per chip mean they drift
+    // in and out of phase with each other, no simple shared period. Chips
+    // themselves are bought automatically by the generic project rule
+    // (project51, repeatable, ops-only cost) - the only thing needed here
+    // is clicking at decent moments. No cost to click (never gated by
+    // affordability, only visibility), so click whenever the aggregate
+    // signal is reasonably close to its per-chip max (some chips will
+    // always lag out of phase - a threshold heuristic, not exact
+    // peak-finding) and there's ops headroom to actually bank the gain
+    // (excess beyond the memory cap decays as tempOps instead of banking
+    // permanently, main.js:3419-3432, so clicking when already at the cap
+    // is mostly wasted). Stays relevant through stage 3 (only hidden at
+    // dismantle>=5, deep in the endgame), not just stage 1.
+    if (g('qFlag') === 1 && adapter.isClickable('btnQcompute')) {
+      var qChips = g('qChips') || [];
+      var qSum = 0, qActiveCount = 0;
+      for (var qi = 0; qi < qChips.length; qi++) {
+        if (qChips[qi].active) { qSum += qChips[qi].value; qActiveCount++; }
+      }
+      var headroom = g('memory') * 1000 - g('standardOps');
+      if (qActiveCount > 0 && qSum >= qActiveCount * 0.6 && headroom > 50) {
+        return act(adapter, 'btnQcompute', 'quantum',
+          'Clicking quantum compute (signal ' + qSum.toFixed(2) + '/' + qActiveCount +
+          ' active chips, headroom=' + Math.floor(headroom) + ' ops).');
+      }
+    }
+
+    // 12. Price matching: set margin so expected sales volume tracks
     // production (clipRate), while enforcing a profit floor above the live
     // marginal cost per clip (every clip - hand, autoclipper, or
     // megaclipper - consumes exactly 1 wire inch, `clipClick()`, so cost per
@@ -387,17 +528,79 @@
       }
     }
 
-    // 10. Stage 2: naive fixed-priority build order (placeholder, see comment above).
+    // 13. Stage 2: bootstrap-first, power-ratio-balanced build order (see
+    // STAGE2_BUILDING_ORDER's comment for the bootstrap bug this replaced).
     if (humanFlag === 0 && g('spaceFlag') === 0) {
-      for (var b2 = 0; b2 < STAGE2_BUILDINGS.length; b2++) {
-        if (adapter.isClickable(STAGE2_BUILDINGS[b2])) {
-          return act(adapter, STAGE2_BUILDINGS[b2], 'stage2',
-            'Building (naive fixed-priority order: factory > harvester > wire drone > farm > battery).');
+      // Bootstrap: one farm (so powMod is nonzero once a factory exists -
+      // main.js:2998) and one battery, then STOP spending on power
+      // infrastructure until the production chain is actually unlocked.
+      // btnMakeFactory doesn't just cost unusedClips - it's invisible
+      // (isClickable() false) until project45 "Clip Factories" is bought,
+      // which itself requires project43 "Harvester Drones" AND project44
+      // "Wire Drones" first (both ops-gated, projects.js:990-1054) - all
+      // three take real time to unlock via the generic project-purchase
+      // step (step 4) after the stage-2 transition, they're not available
+      // instantly. The first version of this fix bootstrapped 1 farm+1
+      // battery, found btnMakeFactory still (correctly) not clickable, and
+      // fell through to an unbounded "buy more farms" fallback - which
+      // bought a 2nd farm (cost formula Math.pow(farmLevel+1,2.78)*1e8,
+      // $686M at farmLevel=1) while genuinely waiting on those unlocks,
+      // recreating the same stockpile-drain bug one level down. Checking
+      // the unlock flags directly (not just isClickable, which can't tell
+      // "not yet unlocked" from "unlocked but unaffordable") avoids that:
+      // don't grow power infrastructure further until there's a real
+      // factory/drone to power.
+      var farmLevel = g('farmLevel'), batteryLevel = g('batteryLevel'), factoryLevel = g('factoryLevel');
+      var chainUnlocked = g('harvesterFlag') === 1 && g('wireDroneFlag') === 1 && g('factoryFlag') === 1;
+      if (farmLevel === 0 && adapter.isClickable('btnMakeFarm')) {
+        return act(adapter, 'btnMakeFarm', 'stage2', 'Bootstrap: first Solar Farm (powMod is 0 with zero farms - main.js:2998).');
+      }
+      if (batteryLevel === 0 && adapter.isClickable('btnMakeBattery')) {
+        return act(adapter, 'btnMakeBattery', 'stage2', 'Bootstrap: first Battery Tower (minimal power storage buffer).');
+      }
+      if (!chainUnlocked) {
+        return wait('stage2', 'Waiting on the Harvester/Wire Drone/Clip Factory unlock chain (ops-gated projects) ' +
+          'before spending unusedClips on more power infrastructure.');
+      }
+      if (factoryLevel === 0 && adapter.isClickable('btnMakeFactory')) {
+        return act(adapter, 'btnMakeFactory', 'stage2', 'Bootstrap: first Factory (the only building that produces clips).');
+      }
+
+      // Once bootstrapped: keep power supply ahead of demand (farmRate=50
+      // vs factoryPowerRate=200 per main.js/globals.js - each factory needs
+      // 4x a farm's output), keep harvester/wireDrone levels balanced (both
+      // feed the same wire-production loop), and otherwise prioritize more
+      // factories (the actual clip source) over more farms/batteries.
+      var supply = farmLevel * 50 / 100;
+      var demand = (g('harvesterLevel') * 1 / 100) + (g('wireDroneLevel') * 1 / 100) + (factoryLevel * 200 / 100);
+      var powerRatio = demand > 0 ? supply / demand : Infinity;
+      if (powerRatio < 1.1 && adapter.isClickable('btnMakeFarm')) {
+        return act(adapter, 'btnMakeFarm', 'stage2',
+          'Power supply (' + supply.toFixed(1) + ') close to demand (' + demand.toFixed(1) + ') - adding a Solar Farm.');
+      }
+      if (adapter.isClickable('btnMakeFactory')) {
+        return act(adapter, 'btnMakeFactory', 'stage2', 'Buying a Factory (the primary clip-production driver).');
+      }
+      var harvesterLevel = g('harvesterLevel'), wireDroneLevel = g('wireDroneLevel');
+      var droneOrder = harvesterLevel <= wireDroneLevel
+        ? ['btnMakeHarvester', 'btnMakeWireDrone']
+        : ['btnMakeWireDrone', 'btnMakeHarvester'];
+      for (var b2 = 0; b2 < droneOrder.length; b2++) {
+        if (adapter.isClickable(droneOrder[b2])) {
+          return act(adapter, droneOrder[b2], 'stage2',
+            'Buying ' + (droneOrder[b2] === 'btnMakeHarvester' ? 'a Harvester' : 'a Wire Drone') +
+            ' (keeping harvester/wireDrone levels balanced - both feed the same wire loop).');
         }
+      }
+      if (adapter.isClickable('btnMakeFarm')) {
+        return act(adapter, 'btnMakeFarm', 'stage2', 'Buying a Solar Farm (fallback - nothing else affordable).');
+      }
+      if (adapter.isClickable('btnMakeBattery')) {
+        return act(adapter, 'btnMakeBattery', 'stage2', 'Buying a Battery Tower (fallback - nothing else affordable).');
       }
     }
 
-    // 11. Stage 3: launch probes, allocate stat points, buy more probe trust.
+    // 14. Stage 3: launch probes, allocate stat points, buy more probe trust.
     if (g('spaceFlag') === 1) {
       if (adapter.isClickable('btnMakeProbe')) {
         return act(adapter, 'btnMakeProbe', 'stage3', 'Launching a probe.');
