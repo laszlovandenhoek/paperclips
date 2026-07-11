@@ -146,13 +146,57 @@ without actually running it, not just reading the code):
   the user.
 
 **Not yet done / known gaps in the naive policy** (all explicitly commented in
-`bot/policy.js` as placeholders): no wire-price timing exploitation (P5, still open
-from the earlier review), naive fixed 1:1 processors:memory split (D6, still open,
-including the creativity-dead-zone finding from that review), naive fixed-priority
-stage-2 build order and stage-3 probe stat allocation (no ratio balancing yet), no
-attempt at the fibonacci-milestone-vs-token trust mix (D4). The policy has not been
-run far enough to reach stage 2, stage 3, or the endgame — only stage 1 has been
-exercised in anger so far.
+`bot/policy.js` as placeholders): no wire-*purchase-timing* exploitation of the
+sine-wave `wireCost` formula (P5, still open from the earlier review — separate from
+price-matching, added next, below), naive fixed 1:1 processors:memory split (D6, still
+open, including the creativity-dead-zone finding from that review), naive
+fixed-priority stage-2 build order and stage-3 probe stat allocation (no ratio
+balancing yet), no attempt at the fibonacci-milestone-vs-token trust mix (D4). The
+policy has not been run far enough to reach stage 2, stage 3, or the endgame — only
+stage 1 has been exercised in anger so far.
+
+### Price-matching strategy (done, follow-up session)
+
+Added a 9th policy step: set `margin` (price per clip — confirmed literally equal to
+it, `sellClips()` uses `funds += clipsDemanded*margin`) so expected sales volume
+tracks production, while enforcing a profit floor above the live marginal cost per
+clip.
+
+Derived the sales-rate formula from the actual 100ms "Slow Loop"
+(`main.js:4564-4576`): with probability `demand/100`, a sale of
+`floor(0.7*demand^1.15)` clips happens, giving `E[salesRate/sec] = 0.07 * demand^2.15`.
+Verified this numerically against the simulator (predicted 1.286/sec vs. 1.26/sec
+measured over 100s at a fixed margin/demand — within sampling noise). Since
+`demand = (.8/margin)*marketing*marketingEffectiveness*demandBoost*(...)` is inversely
+proportional to `margin` at any fixed instant, `demand*margin` is invariant under a
+margin change — so the policy reads the *current* (demand, margin) pair to get that
+constant rather than re-deriving the marketing/demandBoost formula itself, then solves
+for the margin that would produce the demand matching `clipRate` (the game's own
+smoothed clips/sec figure).
+
+Profit floor: every clip (hand click, autoclipper, or megaclipper — all go through
+`clipClick()`) consumes exactly 1 wire inch, so marginal cost per clip is
+`wireCost/wireSupply`; wireSupply-upgrade projects raise that denominator over time
+and are picked up for free since the floor is recomputed from current values every
+cycle, no separate accounting needed. Floor is `max(0.01, costPerClip*1.1)` (10% over
+material cost); target margin is clamped to at least that. `raisePrice()`/
+`lowerPrice()` only move margin ±0.01 per click (no direct "set" control), so the
+policy steps toward the target with a 1.5-step tolerance band to avoid oscillating.
+
+**Known imprecision, documented in the code rather than fixed:** `clipRate` counts all
+clips including the bot's own bootstrap manual clicking (step 5), so before
+`clipmakerLevel` clears that threshold, "production" transiently includes our own
+clicks rather than only sustainable autoclipper output. Self-corrects once bootstrap
+clicking stops, since the target is recomputed fresh every cycle.
+
+**Result: a large, clearly-attributable improvement.** Same seed, same policy
+otherwise, 30-minute-simulated-time comparison: 59,910 clips / trust 9 with
+price-matching vs. ~13,000 clips / trust 7 without (previous session's headless run,
+same timepoint) — roughly 4.6× more clips, and funds stay in a healthier $5-40 range
+throughout instead of $0-20. Verified: `sim/validate.js` still 37/37 (unaffected —
+price-matching only touches stage-1 policy, not the simulator itself), headless smoke
+run to 3,600s clean, and a longer background stability run in progress at time of
+writing.
 
 ### Performance: two rounds, ~48× total (1,600 → 77,991 ticks/sec)
 
@@ -217,18 +261,21 @@ No particular order implied; whichever the user wants to pick up.
    fought honor), OQ1 (quantum tempOps bypassing memory gates), OQ3 (maxTrust-20
    finish feasibility).
 
-**Bot policy iteration** (see "known gaps" in the Autoplay bot section above for the
-full list; roughly in expected-impact order):
-1. Wire price timing (exact sine-wave formula already in ROUTES.md's continuous-controls
-   note) — cheap to add, directly speeds up the stage-1 grind the last headless run got
-   stuck in.
+**Bot policy iteration** (see "known gaps" in the Autoplay bot section, and the
+price-matching section, above for the full list; roughly in expected-impact order):
+1. ~~Price matching~~ — done, see above. Sale-price (`margin`) now tracks production
+   automatically; the remaining wire-related gap is *purchase*-side: exploiting the
+   sine-wave `wireCost` formula (already derived in ROUTES.md's continuous-controls
+   note) to buy wire when it's cheap, rather than the current "buy whenever affordable
+   and below buffer" — smaller expected win now that price-matching is already
+   accelerating the economy.
 2. Smarter economy allocation between wire/clippers/megaclippers/marketing (currently:
    whichever's affordable, in a fixed priority order with wire gated first to avoid the
    deadlock described above) — real payback-time comparisons instead of "buy whenever
    affordable."
-3. Run the policy far enough (needs a longer headless session, or the wire/economy fixes
-   above to actually get there faster) to exercise stage 2, stage 3, and the endgame for
-   the first time — none of that code path has been tested yet, only stage 1.
+3. Run the policy far enough (the price-matching win from this session should help
+   directly) to exercise stage 2, stage 3, and the endgame for the first time — none of
+   that code path has been tested yet, only stage 1.
 4. Processors:memory split (currently naive 1:1), stage-2 build ratios, stage-3 probe
    stat allocation — all explicitly placeholder per the D6/D8/D9/D10 open questions.
 
