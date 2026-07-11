@@ -156,6 +156,21 @@ Forced structure:
   doubling) vs skipping some of the yomi mega-projects (never sensible: +57 trust for
   22.5k yomi is the cheapest trust in the game — **C2 resolved by P3 (§4): proven, not
   conjectured** — CEV/Cancer/Peace/Warming/Baldness are in every optimal route).
+  **Still open, and not the same question as C2:** the clip-milestones-vs-tokens split
+  for whatever trust gap remains after the fixed 67-point baseline. Milestones aren't a
+  purchased "take/skip" decision — `calculateTrust()` (`main.js:3374`) fires
+  automatically whenever clips cross `nextTrust-1`, and clips are being produced
+  continuously anyway (they fund the whole stage-1 money engine), so some milestones
+  happen "for free" regardless of intent. The real lever is only whether to *buy tokens
+  to substitute for waiting on a not-yet-reached milestone* — a dynamic, production-rate-
+  dependent stopping-time question (is the next milestone's clip requirement, at the
+  *current* production rate, faster to reach than the money for a token, at the
+  *current* money-generation rate?), not a fixed-cost comparison like the CEV chain.
+  Given the fibonacci tail's blowup (P3 §4: 28.7M clips at milestone 20, 14.9B at 33),
+  there's very likely an interior optimum — bank the cheap early-to-mid milestones that
+  arrive as a byproduct of normal play, switch to tokens once the marginal milestone
+  gets expensive relative to money-on-hand — but this needs simulator A/B (P4), not a P3
+  closed-form lemma.
 - **D5 — Tournament stack:** which of the 7 strategy unlocks to buy (each +1,000 ops
   tourney cost, more matchups = more yomi & more wall-clock per tournament), Theory of
   Mind (p119, 25k creat: doubles yomi, tourneyCost → 16,000), AutoTourney (p118, 50k
@@ -168,6 +183,19 @@ Forced structure:
 - **D6 — Compute banking:** stage-1 trust split processors:memory over time
   (`creativitySpeed = log10(p)·p^1.1 + p − 1`, ops regen = 10·p/sec, cap = 1000·m), and
   how much memory to bank for stage-2/3 ops gates vs relying on swarm gifts.
+  **Sharper than previously stated: creativity only accrues at all while
+  `operations >= memory*1000`** (`main.js:4321`, `if (creativityOn && operations >=
+  (memory*1000)) calculateCreativity();`) — not continuously. Every ops-gated
+  project purchase drains ops below the cap and creativity accrual *fully stops*
+  until ops refill back up to `memory*1000` at rate `10·processors/sec`, i.e. for
+  `100·memory/processors` seconds after every purchase. Raising memory without a
+  matching rise in processors doesn't just raise the ops ceiling — it lengthens
+  every post-purchase creativity-dead-zone, which delays every creat-gated project
+  (most of the G1–G7 chain, CEV, tournament unlocks, combat honor stack). This is a
+  real, previously-unquantified tension in the processors:memory split, not just
+  the ops-regen-rate-vs-ops-cap tradeoff already noted — not yet resolved
+  quantitatively (needs a P4 A/B: total stage-1 wall-clock under different
+  processors:memory schedules, accounting for this dead-zone effect).
 - **D7 — Xavier Re-initialization** (p219, 100,000 creat, stage 1 only): zero out
   procs/mem and re-allocate all accumulated trust. Take/skip + timing. (Classically used
   before Release to re-spec; 100k creat is enormous — needs analysis.)
@@ -195,9 +223,17 @@ Forced structure:
 ### Continuous (policy within a route — optimized later, not enumerated)
 
 Stage 1: price/margin schedule, marketing level timing (adCost doubles), clipper vs
-megaclipper purchase schedule, wire purchase timing (price random walk, base creeps +.05
-per buy, decays to floor 15), quantum click timing, tournament cadence & pick,
-investment deposits/withdrawals & risk switching, proc:mem ratio schedule.
+megaclipper purchase schedule, **wire purchase timing** (`main.js:695-728`:
+`wireCost = ceil(wireBasePrice + 6·sin(wirePriceCounter))`, `wirePriceCounter`
+advances on ~1.5% of ticks; `wireBasePrice` creeps +.05 per purchase and decays
+`-wireBasePrice/1000` every 250 ticks-since-last-purchase toward a floor of 15 —
+a genuine, exploitable sine-wave price oscillation of ±6 around a slow-drifting
+base; NOT modeled by P3's wireSupply-upgrade lemma, which is a separate question
+about whether to buy the permanent supply-multiplier *projects*, not about *when*
+to click buy — still fully open), quantum click timing, tournament cadence &
+grid-aware pick (P3, §4), investment deposits/withdrawals & risk switching,
+proc:mem ratio schedule (now sharper per D6 above: also governs post-purchase
+creativity dead-zone length, not just the ops ceiling).
 Stage 2: farm:battery:harvester:wire-drone:factory build ratios (drone ratio must stay
 ≤ 1.5 to avoid disorganization; boredom at `availableMatter == 0` — pay creat to
 entertain), swarm slider (work↔think: gift rate vs production), reboot timing before G14.
@@ -311,37 +347,60 @@ one archetype with continuous-control optimization remaining.
     to or smaller than a single G1–G7 gate) to avoid ever needing to reach into that
     exponential tail dominates for any plausible clip-production rate. **Always
     take.**
-  - **Tournament pick policy — GREEDY does *not* dominate; BEATLAST does.** The
-    original conjecture was wrong. Modeled the full mechanic exactly: 8 strategies
-    (fixed unlock order RANDOM/A100/B100/GREEDY/GENEROUS/MINIMAX/TITFORTAT/BEATLAST
-    — `projects.js` gates each strictly on the previous one's flag, so no other
-    order is reachable), a complete 8×8=64 ordered-pair round-robin including
-    self-play (`pickStrats`, `main.js:1919`), 10 sub-rounds per pairing, and global
-    `hMove(Prev)`/`vMove(Prev)` state that persists *across* pairings (a strategy's
-    first move against a new opponent can depend on the previous opponent's last
-    move) plus a `currentPos` quirk where self-play (h===v) makes a
-    history-dependent strategy see the "v-role" formula for *both* its moves that
-    round. Only RANDOM is stochastic per-move; the rest are deterministic given the
-    (fixed per-tournament) grid and/or move history, which reduces the process to a
-    4-state ((hMovePrev,vMovePrev)) Markov chain — exactly solvable, no sampling,
-    by forward probability propagation over all 10,000 equally-likely integer grids
-    (`aa,ab,ba,bb ∈ {1..10}`, `analysis/tourney_exact.js`). Cross-validated against
-    100,000 Monte Carlo trials driving the *actual* game functions
-    (`pickStrats`/`calcPayoff`/`pickMove` via the simulator,
-    `analysis/tourney_montecarlo.js`) — matches within confidence intervals.
-    Exact E[score], full 8-strategy tournament: BEATLAST 1083.45 > GREEDY 1059.97 >
-    GENEROUS 940.06 > TITFORTAT 898.93 > A100 895.68 > B100 894.85 > RANDOM 880.02 >
-    MINIMAX 852.83. The yomi-relevant quantity is actually `score × beatBoost`
-    (rank-based, `declareWinner`/`calculateStratsBeat`, `main.js:2125` /
-    `main.js:2169`), computed via 100,000-trial Monte Carlo on the real game code
-    (`analysis/tourney_yomi.js`): BEATLAST 5507 ± 13 vs. GREEDY 5314 ± 16 (95% CI,
-    non-overlapping) — BEATLAST wins by ~3.6%, consistently. Curiously, BEATLAST's
-    *outright*-tournament-win rate is 0.0% (it is extremely consistently 2nd/3rd,
-    never 1st) while GREEDY wins outright 18.1% of the time — high consistency beats
-    high ceiling here because yomi is rank-weighted, not winner-take-all.
-    **Always pick BEATLAST**, once unlocked, in any route running the full 8-strategy
-    round-robin. (Whether to unlock all 7 strategies at all — the tourneyCost-vs-yomi
-    tradeoff — is a separate, still-open D5 question for P4.)
+  - **Tournament pick policy — neither GREEDY nor a fixed BEATLAST is optimal; the
+    grid is visible before you commit, so the real policy is adaptive.** Two rounds
+    of correction here (see git history): first found the *original* "GREEDY
+    dominates" conjecture wrong (BEATLAST beats GREEDY as a fixed policy); then
+    found that framing itself wrong — fixed policies aren't the right question.
+    Modeled the full mechanic exactly: 8 strategies (fixed unlock order
+    RANDOM/A100/B100/GREEDY/GENEROUS/MINIMAX/TITFORTAT/BEATLAST — `projects.js`
+    gates each strictly on the previous one's flag, so no other order is
+    reachable), a complete 8×8=64 ordered-pair round-robin including self-play
+    (`pickStrats`, `main.js:1919`), 10 sub-rounds per pairing, and global
+    `hMove(Prev)`/`vMove(Prev)` state that persists *across* pairings plus a
+    `currentPos` self-play quirk. Only RANDOM is stochastic per-move, which
+    reduces the process to a 4-state Markov chain — exactly solvable, no
+    sampling, by forward probability propagation over all 10,000 equally-likely
+    integer grids (`analysis/tourney_exact.js`). Cross-validated against 100,000
+    Monte Carlo trials driving the actual game functions
+    (`analysis/tourney_montecarlo.js`) — matches within confidence intervals.
+    Fixed-policy exact E[score]: BEATLAST 1083.45 > GREEDY 1059.97 > GENEROUS
+    940.06 > ... (full ranking in git history / script output).
+
+    **But `newTourney()` calls `generateGrid()` and updates the on-screen grid
+    *before* `btnRunTournamentElement` is enabled, and `declareWinner()` only
+    reads `pick` once the full round-robin completes** — so a bot can read the
+    realized `(aa,ab,ba,bb)` up front, compute each strategy's *exact* expected
+    score for that specific grid (the same per-grid function the Markov chain
+    above already computes — genuinely exact, not hindsight), and pick the
+    argmax. This is a real, realizable policy, not cheating. Compared head-to-head
+    on identical grids+RNG (`analysis/tourney_adaptive.js`, 20,000 trials): fixed
+    BEATLAST scores 5529±30 (`score×beatBoost`) vs. **adaptive argmax-E[score|grid]
+    scores 6882±28 — a ~24% improvement**, growing to **~48%** once project128's
+    top-3 bonus is included (23,354±348 vs. 34,612±358 — see below). The adaptive
+    policy picks BEATLAST only 14.3% of the time; more often it picks GREEDY
+    (25.7%), B100 (21.4%), or GENEROUS (17.3%), depending on how lopsided the
+    realized grid is — BEATLAST's average-case robustness doesn't win on grids
+    that reward fully committing to one row/column, which a deterministic
+    strategy exploits better. **Policy: always pick `argmax_X E[score_X | grid]`
+    computed from the revealed grid, not a fixed strategy.**
+
+    **project128 (Strategic Attachment, 175k creat, requires `strats.length>=8` —
+    i.e. only reachable with the full 8-strategy tournament) adds +50k/+30k/+20k
+    yomi for finishing 1st/2nd/3rd** (`main.js:2134-2154`) and was missing from
+    the original analysis entirely — it roughly **quadruples** total yomi per
+    tournament (5529 → 23,354 for fixed BEATLAST; 6882 → 34,612 for the adaptive
+    policy, both including the bonus), confirming ROUTES.md's own "dominant yomi
+    source lategame" note. Should be modeled by default in any further tournament
+    analysis, not treated as a side detail.
+
+    Not yet done: whether `argmax E[score|grid]` (which optimizes raw score,
+    correlated with but not identical to the rank/bonus-bucket-weighted true
+    payoff) is itself optimal, versus e.g. `argmax P(top-3|grid)` once project128
+    is active — likely a small further gain given how large the argmax-E[score]
+    improvement already is, but unverified. Also: whether to unlock all 7
+    strategies at all (tourneyCost-vs-yomi tradeoff) remains a separate, open D5
+    question for P4.
 - **P4 — Axis winners.** Sim-based A/B per axis (D2, D3, D5, D6, D7, D9/D10) holding the
   rest at R1 defaults, then check for cross-terms between surviving variants.
 - **P5 — Continuous-control optimization** inside the surviving route: greedy/LP bounds
