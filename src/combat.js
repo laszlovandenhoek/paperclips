@@ -291,12 +291,24 @@ function Battle(){
 	}
 
 	var Update = function(){
-		
+
+        // Runs on a 16ms timer from script load, independent of whether a real
+        // battle has ever started (createBattle() is gated separately, by
+        // checkForBattles() in main.js's war()). Until the first real battle,
+        // unitSize stays 0 and every state-mutating effect in DoCombat is
+        // scaled by it (probeCount/drifterCount/probesLostCombat/driftersKilled
+        // all get += 0), and checkForBattleEnd() is separately gated on
+        // battles.length>0 — so this whole cycle is provably a no-op on any
+        // externally observable state while dormant. Skipping it here avoids
+        // flocking 400 placeholder ships every 16ms for the entire pre-war
+        // portion of the game, which is most of any playthrough.
+        if (unitSize === 0) return;
+
         ClearFrame();
         UpdateGrid();
         MoveShips();
         DoCombat();
-		
+
 	}
     
 function checkForBattleEnd(){
