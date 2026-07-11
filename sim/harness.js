@@ -55,24 +55,48 @@ const WRAPPER_PARAMS = [
   'setInterval', 'setTimeout', 'clearInterval', 'clearTimeout', 'Math', '__ids',
 ];
 
-function parseHtmlTags(html) {
-  // Returns [{tag, attrs}] for every opening tag; tolerant of newlines and
-  // `id = "..."` spacing used throughout index2.html.
-  const tags = [];
-  const tagRe = /<(\w+)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
+// HTML5 void elements: no closing tag, never push onto the nesting stack.
+const VOID_TAGS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+  'link', 'meta', 'param', 'source', 'track', 'wbr',
+]);
+
+function tokenizeHtml(html) {
+  // Returns [{type: 'open'|'close'|'selfclose', tag, attrs}] in document
+  // order. Strips comments first — the old regex-only parser had no comment
+  // awareness and would register ids from index2.html's several commented-out
+  // debug/cheat blocks, which a real browser never renders at all.
+  const stripped = html.replace(/<!--[\s\S]*?-->/g, '');
+  const tokens = [];
+  const tagRe = /<(\/?)([\w-]+)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
   const attrRe = /([\w-]+)\s*=\s*"([^"]*)"|([\w-]+)(?=[\s>])/g;
   let m;
-  while ((m = tagRe.exec(html)) !== null) {
+  while ((m = tagRe.exec(stripped)) !== null) {
+    const tag = m[2].toLowerCase();
+    if (m[1] === '/') {
+      tokens.push({ type: 'close', tag, attrs: {} });
+      continue;
+    }
     const attrs = {};
     let a;
     attrRe.lastIndex = 0;
-    while ((a = attrRe.exec(m[2])) !== null) {
+    while ((a = attrRe.exec(m[3])) !== null) {
       if (a[1] !== undefined) attrs[a[1]] = a[2];
       else if (a[3] !== undefined && !(a[3] in attrs)) attrs[a[3]] = '';
     }
-    tags.push({ tag: m[1].toLowerCase(), attrs });
+    const isVoid = m[4] === '/' || VOID_TAGS.has(tag);
+    tokens.push({ type: isVoid ? 'selfclose' : 'open', tag, attrs });
   }
-  return tags;
+  return tokens;
+}
+
+function parseHtmlTags(html) {
+  // Flat [{tag, attrs}] for every opening (incl. self-closing/void) tag —
+  // used where nesting doesn't matter (predeclare id collection). See
+  // _buildDomFromHtml for the nesting-aware consumer of tokenizeHtml().
+  return tokenizeHtml(html)
+    .filter((t) => t.type !== 'close')
+    .map((t) => ({ tag: t.tag, attrs: t.attrs }));
 }
 
 // Module-level cache: the wrapper source is parsed/compiled once (via
@@ -209,27 +233,64 @@ class Sim {
     this.document._loadPhase = false;
   }
 
+  // Builds a REAL parent/child tree (not a flat body-children list) — needed
+  // so ancestor-chain visibility checks (bot/adapters/*'s isVisible(), used
+  // to catch sections gated purely by a container's `style.display`, like
+  // the tournament UI before Strategic Modeling — see git history) see the
+  // same structure a real browser would. Stack-based: 'open' pushes,
+  // 'close' pops back to the nearest matching ancestor (tolerant of
+  // mismatched/unclosed tags — searches for a match rather than assuming
+  // perfect balance, and simply no-ops if none is found).
   _buildDomFromHtml(htmlPath) {
     const html = fs.readFileSync(htmlPath, 'utf8');
     let currentSelect = null;
-    for (const { tag, attrs } of parseHtmlTags(html)) {
-      if (tag === 'script' || tag === 'link' || tag === 'meta') continue;
+    const stack = [this.document.body]; // stack[0] is the permanent root
+    for (const tok of tokenizeHtml(html)) {
+      const { type, tag, attrs } = tok;
+      if (type === 'close') {
+        if (tag === 'body') continue; // never pop the root
+        for (let i = stack.length - 1; i > 0; i--) {
+          if (stack[i].tagName.toLowerCase() === tag) {
+            stack.length = i;
+            break;
+          }
+        }
+        continue;
+      }
+      if (tag === 'html' || tag === 'head' || tag === 'body' || tag === 'script' || tag === 'link' || tag === 'meta') continue;
+
+      const parent = stack[stack.length - 1];
       let el = null;
       if (attrs.id) {
-        el = this.document.getElementById(attrs.id) || null;
+        // NOT this.document.getElementById(): during _loadPhase (true for
+        // the entire duration of this method — it's only cleared once the
+        // game scripts have also finished running) getElementById() has a
+        // tolerance fallback that auto-creates ANY missing id as a flat
+        // child of body (see env.js) — meant for ids the HTML parse missed
+        // entirely, but it silently fires on every id's first occurrence
+        // right here too, which defeated the nesting this method exists to
+        // build (every element ended up flat under body regardless of the
+        // stack). Read the registry directly to skip that fallback.
+        el = this.document._registry.get(attrs.id) || null;
         if (!el) {
           el = this.document.createElement(tag);
           el.setAttribute('id', attrs.id);
-          this.document.body.appendChild(el);
+          parent.appendChild(el);
         }
         if ('disabled' in attrs) el.disabled = true;
         if ('value' in attrs) el.value = attrs.value;
         if (attrs.onclick) this.htmlOnclick.set(attrs.id, attrs.onclick);
+      } else {
+        // No id, but still a real node in the tree — needed so id'd
+        // descendants nest under the correct (possibly hidden) ancestor.
+        el = this.document.createElement(tag);
+        parent.appendChild(el);
       }
       if (tag === 'select') currentSelect = el;
       if (tag === 'option' && currentSelect && currentSelect.value === '' && 'value' in attrs) {
         currentSelect.value = attrs.value; // browser default: first option selected
       }
+      if (type === 'open') stack.push(el);
     }
   }
 
