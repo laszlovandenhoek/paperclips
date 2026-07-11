@@ -106,7 +106,14 @@ function buildFactory(srcDir) {
   for (const id of idNames) declParts.push(`${id} = __ids[${JSON.stringify(id)}]`);
   for (const name of predeclareOnly) declParts.push(name);
 
-  let src = `(function(${WRAPPER_PARAMS.join(',')}) {\n"use strict";\n`;
+  // Deliberately NOT strict mode: the original source has no "use strict"
+  // anywhere and, in at least one place (combat.js createBattle() calling
+  // `Battle()` without `new`), relies on sloppy-mode `this` defaulting to
+  // the global object rather than throwing. Implicit-global safety doesn't
+  // depend on strict mode here — every bare assignment target is already
+  // predeclared with `var` above, so sloppy-mode "helpfully" creating a
+  // global for an undeclared identifier never actually triggers.
+  let src = `(function(${WRAPPER_PARAMS.join(',')}) {\n`;
   if (declParts.length) src += `var ${declParts.join(',')};\n`;
   for (let i = 0; i < LOAD_ORDER.length; i++) {
     src += `\n//region ${LOAD_ORDER[i]}\n${fileSources[i]}\n//endregion\n`;
