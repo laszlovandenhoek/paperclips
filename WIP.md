@@ -11,6 +11,19 @@ mirror. That constraint was a misunderstanding — the user has confirmed it's f
 change or reimplement game source (even in another language) as long as the
 replacement is behaviorally equivalent. `src/combat.js` has one small, deliberate edit
 (see below); the underlying game logic there is unchanged, only when it runs.
+`src/index2.html` now also has a deliberate, additive edit (the bot side panel, see
+below) — nothing existing was removed or altered, just new markup/script includes.
+
+**Click-rate scope, settled:** 30 clicks/sec (human-realistic keyboard-repeat rate —
+click once, hold Enter), not arbitrary bot speed. Written into ROUTES.md's optimality
+metric section and enforced by both bot adapters (see below).
+
+**Second stated goal, added this session, alongside "prove the optimal strategy":**
+build an autoplay bot with a live side panel on the actual game page (shows the
+current automated decision/tradeoff + a timer), a first (deliberately naive, iterate
+later) policy that plays the whole game start to finish, and integration with the
+headless simulator so the same policy can be run at simulator speed instead of real
+time. Done this session — see "Autoplay bot" below.
 
 ### Done
 
@@ -67,6 +80,80 @@ Four sub-results, all written up in ROUTES.md §4 with derivations; scripts live
 Whether to unlock all 7 strategies at all (tourneyCost-vs-yomi tradeoff) is a separate,
 still-open D5 question left for P4.
 
+### Autoplay bot: policy + side panel + sim integration (done this session)
+
+New `bot/` directory, engine-agnostic by design:
+
+- **`bot/policy.js`** — the decision engine. `decide(adapter)` reads game state via a
+  small adapter interface (`get(name)`, `isClickable(id)`, `click(id)`, `setValue(id,v)`)
+  and returns/executes one action per call, plus a human-readable phase + reason for
+  display. UMD-wrapped so the identical file works via `require()` in Node and as a
+  plain `<script>` in the browser. Deliberately naive — goal is *completeness* (reach
+  credits) over optimality, explicitly per user request, with a few decisions backed by
+  this session's P3 results (skip RevTracker, adaptive grid-aware tournament pick — the
+  exact scoring model from `analysis/tourney_exact.js` is copied in self-contained so
+  this file has no dependency on `analysis/`) and everything else a simple
+  affordability-gated default, commented as a placeholder for later iteration
+  (processors:memory split, stage-2 build ratios, probe stat priority, wire price
+  timing — all still open per the earlier review this session).
+- **`bot/adapters/sim-adapter.js`** / **`bot/adapters/browser-adapter.js`** — same
+  interface, one wraps `sim/harness.js`'s `Sim` (virtual clock), one wraps the real page
+  (`window`/`document`, real wall clock). Both enforce the 30 clicks/sec cap
+  independently against their own clock, so headless runs stay comparable to a real
+  playthrough's click budget rather than assuming superhuman input.
+- **`bot/run-headless.js`** — CLI: drives the policy against the simulator at full
+  speed. This is the "speed up wall-clock time" integration the user asked for — the
+  *same* policy that can drive the real browser can instead drive the simulator, which
+  ticks far faster than real time.
+- **`bot/panel.js`** + **`bot/panel.css`** — the live side panel: timer, current
+  decision (phase + reason), and a scrolling action log (consecutive identical actions
+  collapse into a `(x{count})` counter — otherwise bootstrap-clicking floods it with
+  duplicate lines). Pause/resume toggle. Injected into `src/index2.html` as additional
+  markup + script includes after `main.js` (so game globals already exist when
+  `panel.js` runs) — purely additive, nothing existing in the page was changed.
+
+**Two real bugs found and fixed while building this** (both would have been invisible
+without actually running it, not just reading the code):
+1. AutoClippers/MegaClippers/Marketing are **not** projects (not in `activeProjects` —
+   they're always-available buttons with their own escalating `$` cost), so the first
+   version of the policy never bought a single autoclipper and stayed on manual
+   clicking for the full 600 s smoke test. Fixed by adding an explicit economy-purchase
+   step.
+2. Once that was fixed, a worse bug appeared: prioritizing autoclipper purchases (cheap,
+   ~$5-6) over wire restocking (pricier, ~$17-26) let cheap purchases keep draining
+   funds a few dollars at a time, wire hit 0, clip production stopped entirely, and the
+   only remaining income (trickle sales from existing inventory) was never enough to
+   ever afford wire again — a genuine soft-lock, reproduced and confirmed via
+   `bot/run-headless.js`. Fixed by making wire a hard gate: whenever wire is low, either
+   buy it or hold funds and fall through to manual clicking (which doesn't cost money) -
+   never spend on anything else in the meantime.
+3. (Non-functional but worth noting.) Calling `decide()` every single 10 ms game tick
+   made headless runs ~20× slower (each call does ~20-30 `eval()`-based reads through
+   the sim's Proxy, which isn't free like native closure access) — dropped to every 5
+   ticks (50 ms), still far ahead of the 30/sec click cap, recovered full throughput.
+
+**Verified two ways:**
+- Headless, `bot/run-headless.js`: ran 2.8 simulated days / 43,600+ bot actions with
+  zero crashes before being stopped deliberately (not a failure — a naive stage-1-only
+  economy loop grinding fibonacci-milestone trust is legitimately slow, trust=17 by
+  then; see the D4 fibonacci-vs-tokens gap noted above for why). At the fixed 50 ms
+  decision cadence this ran at ~800-900× real time.
+- Real browser, via Playwright (pre-installed Chromium, `chromium.launch()` with no
+  args — already configured, no download needed): loaded the actual `index2.html`,
+  confirmed the panel renders, the timer advances, the action log populates and
+  dedupes, pause/resume actually stops/resumes clicking (verified by log entry count
+  freezing, not just the button label), and zero console errors. Screenshot sent to
+  the user.
+
+**Not yet done / known gaps in the naive policy** (all explicitly commented in
+`bot/policy.js` as placeholders): no wire-price timing exploitation (P5, still open
+from the earlier review), naive fixed 1:1 processors:memory split (D6, still open,
+including the creativity-dead-zone finding from that review), naive fixed-priority
+stage-2 build order and stage-3 probe stat allocation (no ratio balancing yet), no
+attempt at the fibonacci-milestone-vs-token trust mix (D4). The policy has not been
+run far enough to reach stage 2, stage 3, or the endgame — only stage 1 has been
+exercised in anger so far.
+
 ### Performance: two rounds, ~48× total (1,600 → 77,991 ticks/sec)
 
 **Round 1 — eliminate `vm`.** Node `vm` contextified sandboxes intercept every global
@@ -112,9 +199,14 @@ formatting/spelling) — real work, not waste. Good stopping point for P0 throug
 - #1 done: main.js extraction. #2 done: combat/globals extraction.
 - #3 done: headless simulator harness (P0).
 - P3 (always/never-take lemmas) done this session — see above.
+- Autoplay bot (policy + side panel + sim integration) done this session — see above.
 
-## Next: resume the ROUTES.md plan
+## Next
 
+Two parallel tracks now — the analytical ROUTES.md plan, and iterating the bot policy.
+No particular order implied; whichever the user wants to pick up.
+
+**ROUTES.md plan:**
 1. P1: kill R6 (prestige loops) analytically. Not yet started.
 2. Canvas-combat response-surface harness (isolated `DoCombat` + flocking Monte Carlo
    over probeCombat × probeSpeed × ship ratio) → feeds Lanchester outer model. The
@@ -125,10 +217,29 @@ formatting/spelling) — real work, not waste. Good stopping point for P0 throug
    fought honor), OQ1 (quantum tempOps bypassing memory gates), OQ3 (maxTrust-20
    finish feasibility).
 
+**Bot policy iteration** (see "known gaps" in the Autoplay bot section above for the
+full list; roughly in expected-impact order):
+1. Wire price timing (exact sine-wave formula already in ROUTES.md's continuous-controls
+   note) — cheap to add, directly speeds up the stage-1 grind the last headless run got
+   stuck in.
+2. Smarter economy allocation between wire/clippers/megaclippers/marketing (currently:
+   whichever's affordable, in a fixed priority order with wire gated first to avoid the
+   deadlock described above) — real payback-time comparisons instead of "buy whenever
+   affordable."
+3. Run the policy far enough (needs a longer headless session, or the wire/economy fixes
+   above to actually get there faster) to exercise stage 2, stage 3, and the endgame for
+   the first time — none of that code path has been tested yet, only stage 1.
+4. Processors:memory split (currently naive 1:1), stage-2 build ratios, stage-3 probe
+   stat allocation — all explicitly placeholder per the D6/D8/D9/D10 open questions.
+
 ## Repo state
 
 - `sim/` — headless simulator (env.js, harness.js, scan-globals.js, validate.js).
-- `analysis/` — new this session: `tourney_exact.js`, `tourney_montecarlo.js`,
-  `tourney_yomi.js` (P3's tournament pick-policy analysis).
+- `analysis/` — `tourney_exact.js`, `tourney_montecarlo.js`, `tourney_yomi.js`,
+  `tourney_adaptive.js` (P3's tournament pick-policy analysis).
+- `bot/` — new this session: `policy.js`, `adapters/sim-adapter.js`,
+  `adapters/browser-adapter.js`, `run-headless.js`, `panel.js`, `panel.css`.
 - `src/combat.js` — one-line dormant-period gate in `Update()` (see Performance above).
-- ROUTES.md — P3 results and the D4/D5 conjecture corrections written in.
+- `src/index2.html` — additive edit: bot side-panel markup + script includes.
+- ROUTES.md — P3 results, the click-rate scope decision, and the D4/D5/D6 corrections
+  from this session's review all written in.

@@ -24,7 +24,11 @@ The game is hard real-time gated: main loop = 10 ms tick (`main.js:4188`), sales
 market = 100 ms loop, stocks = 1 s/2.5 s loops, tournaments ≈ 1 s per matchup. Nothing
 scales with player clicking except a few click-gated actions (quantum compute, manual
 clips at the very start and very end). So the objective is ticks-to-credits; clicks are a
-secondary resource (assume a bot can click arbitrarily fast where allowed).
+secondary resource, but not an unlimited one: **settled at a human-realistic 30
+clicks/sec cap** (keyboard-repeat rate — click once, hold Enter), not arbitrary bot
+speed. This matters most for D2 (quantum photonic-chip clicking, sine-timed, up to
+~3,600 ops/click at full chips — the achievable rate directly gates how much of that
+ceiling is reachable) and manual clip-clicking at the very start/end.
 
 **Route vs policy.** RNG exists in: wire market, clip sales, stock market, tournament
 payoff grids, and battles (`combat.js`). So the optimal strategy is a *policy*

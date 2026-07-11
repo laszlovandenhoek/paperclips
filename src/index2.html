@@ -2,6 +2,7 @@
     <head>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <link rel="stylesheet" type="text/css" href="interface.css" />
+        <link rel="stylesheet" type="text/css" href="../bot/panel.css" />
     </head>
     
     <body>
@@ -902,10 +903,27 @@
             
             
         </div>
-        <script type="text/javascript" src="combat.js"></script>     
-        <script type="text/javascript" src="globals.js"></script>      
-        <script type="text/javascript" src="projects.js"></script>   
+
+        <div id="botPanel">
+            <h3>Autoplay Bot <button id="botPanelToggle"></button></h3>
+            <div id="botTimer">
+                <span class="label">Elapsed</span>
+                <span id="botTimerValue">0:00</span>
+            </div>
+            <div id="botDecision">
+                <span id="botDecisionPhase" class="phase">idle</span>
+                <div id="botDecisionReason" class="reason">Starting up...</div>
+            </div>
+            <div id="botLog"></div>
+        </div>
+
+        <script type="text/javascript" src="combat.js"></script>
+        <script type="text/javascript" src="globals.js"></script>
+        <script type="text/javascript" src="projects.js"></script>
         <script type="text/javascript" src="main.js"></script>
-        
+        <script type="text/javascript" src="../bot/policy.js"></script>
+        <script type="text/javascript" src="../bot/adapters/browser-adapter.js"></script>
+        <script type="text/javascript" src="../bot/panel.js"></script>
+
     </body>
 </html>
