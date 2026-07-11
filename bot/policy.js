@@ -162,6 +162,28 @@
     return { action: 'wait', phase: phase, reason: reason };
   }
 
+  // --- price-matching (main.js:4564-4576, the 100ms "Slow Loop") -----------
+  // Every 100ms: with probability demand/100, a sale of floor(0.7*demand^1.15)
+  // clips happens, at $margin each (sellClips() literally uses `margin` as
+  // the per-clip price - confirmed against the UI's "Price per Clip: $
+  // .25" at the default margin=0.25). So in expectation (while unsoldClips
+  // isn't the binding constraint):
+  //   salesRate/sec = 10 * (demand/100) * 0.7 * demand^1.15
+  //                 = SALES_COEFFICIENT * demand^SALES_EXPONENT
+  // and demand = (.8/margin)*marketing*marketingEffectiveness*demandBoost*(1+prestigeU/10)
+  // is (at a fixed instant) inversely proportional to margin - i.e.
+  // demand*margin is invariant under a margin change. That lets us solve for
+  // the margin that makes expected sales rate match production (clipRate,
+  // the game's own smoothed clips/sec figure) WITHOUT re-deriving the
+  // marketing/demandBoost/prestige formula ourselves: read the current
+  // (demand, margin) pair to get that invariant, then solve for the margin
+  // that would produce the target demand.
+  var SALES_COEFFICIENT = 0.07; // = 10 ticks/sec * (1/100 probability scale) * 0.7
+  var SALES_EXPONENT = 2.15; // = 1 (probability~demand) + 1.15 (sale-size exponent)
+  function demandForSalesRate(ratePerSec) {
+    return Math.pow(ratePerSec / SALES_COEFFICIENT, 1 / SALES_EXPONENT);
+  }
+
   // Naive stage-2 build order: whichever of these is currently affordable,
   // in this fixed priority order. No attempt yet at balancing ratios (e.g.
   // the drone:harvester ratio ceiling mentioned in ROUTES.md) - placeholder
@@ -316,7 +338,48 @@
         ' (generic rule - trigger-gating already sequences the tree; see NEVER_TAKE_PROJECTS for exceptions).');
     }
 
-    // 9. Stage 2: naive fixed-priority build order (placeholder, see comment above).
+    // 9. Price matching: set margin so expected sales volume tracks
+    // production (clipRate), while enforcing a profit floor above the live
+    // marginal cost per clip (every clip - hand, autoclipper, or
+    // megaclipper - consumes exactly 1 wire inch, `clipClick()`, so cost per
+    // clip is wireCost/wireSupply; wireSupply-upgrade projects raise that
+    // denominator over time and are picked up automatically here since we
+    // always read the current values, no separate accounting needed).
+    // Lower priority than purchases: a price nudge is never urgent, and
+    // funds/project decisions matter more when both are pending.
+    // Known imprecision: clipRate counts ALL clips including our own
+    // bootstrap manual clicking (step 5), so before clipmakerLevel clears
+    // that threshold, "production" here transiently includes our own
+    // clicks rather than only sustainable autoclipper output. Self-corrects
+    // once bootstrap clicking stops and clipRate settles, since this is
+    // recomputed fresh every cycle - not worth extra machinery to fix for a
+    // first pass.
+    if (humanFlag === 1 && g('clipRate') > 0) {
+      var wireSupply = g('wireSupply');
+      var costPerClip = wireSupply > 0 ? g('wireCost') / wireSupply : 0;
+      var minProfitableMargin = Math.max(0.01, costPerClip * 1.1); // 10% over material cost
+      var demandConstant = g('demand') * g('margin'); // invariant under margin changes at a fixed instant
+      var targetDemand = demandForSalesRate(g('clipRate'));
+      var targetMargin = targetDemand > 0 ? demandConstant / targetDemand : minProfitableMargin;
+      var desiredMargin = Math.max(targetMargin, minProfitableMargin);
+      var currentMargin = g('margin');
+      var PRICE_STEP = 0.01; // raisePrice()/lowerPrice() always move margin by exactly this
+      var PRICE_TOLERANCE = 1.5 * PRICE_STEP; // avoid oscillating over sub-step differences
+      if (currentMargin < desiredMargin - PRICE_TOLERANCE && adapter.isClickable('btnRaisePrice')) {
+        return act(adapter, 'btnRaisePrice', 'pricing',
+          'Raising price ($' + currentMargin.toFixed(2) + ' -> target $' + desiredMargin.toFixed(2) +
+          ') to slow sales toward production rate (clipRate=' + g('clipRate').toFixed(1) + '/s), staying above ' +
+          'cost-per-clip $' + costPerClip.toFixed(4) + '.');
+      }
+      if (currentMargin > desiredMargin + PRICE_TOLERANCE && adapter.isClickable('btnLowerPrice')) {
+        return act(adapter, 'btnLowerPrice', 'pricing',
+          'Lowering price ($' + currentMargin.toFixed(2) + ' -> target $' + desiredMargin.toFixed(2) +
+          ') to grow sales toward production rate (clipRate=' + g('clipRate').toFixed(1) + '/s), staying above ' +
+          'cost-per-clip $' + costPerClip.toFixed(4) + '.');
+      }
+    }
+
+    // 10. Stage 2: naive fixed-priority build order (placeholder, see comment above).
     if (humanFlag === 0 && g('spaceFlag') === 0) {
       for (var b2 = 0; b2 < STAGE2_BUILDINGS.length; b2++) {
         if (adapter.isClickable(STAGE2_BUILDINGS[b2])) {
@@ -326,7 +389,7 @@
       }
     }
 
-    // 10. Stage 3: launch probes, allocate stat points, buy more probe trust.
+    // 11. Stage 3: launch probes, allocate stat points, buy more probe trust.
     if (g('spaceFlag') === 1) {
       if (adapter.isClickable('btnMakeProbe')) {
         return act(adapter, 'btnMakeProbe', 'stage3', 'Launching a probe.');
