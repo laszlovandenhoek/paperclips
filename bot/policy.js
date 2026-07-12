@@ -210,16 +210,6 @@
   // flatlined for 20,000+ simulated seconds with 0 factories.
   var STAGE2_BUILDING_ORDER = ['btnMakeFactory', 'btnMakeHarvester', 'btnMakeWireDrone', 'btnMakeFarm', 'btnMakeBattery'];
 
-  // Naive stage-3 probe stat priority: combat first (mandatory per ROUTES.md
-  // G-gates - drifter casualties scale with probeCombat^1.7, probeCombat=0
-  // kills nothing), then a simple fixed order for the rest. Placeholder -
-  // OQ3 (maxTrust-20 feasibility) and the honor-stack conjecture C3 aren't
-  // resolved yet, so this isn't claiming to be the optimal allocation.
-  var PROBE_STAT_BUTTONS = [
-    'btnRaiseProbeCombat', 'btnRaiseProbeHaz', 'btnRaiseProbeSpeed',
-    'btnRaiseProbeNav', 'btnRaiseProbeRep', 'btnRaiseProbeFac', 'btnRaiseProbeHarv',
-  ];
-
   var AUTOCLIPPER_CAP = 75; // community speedrun guide; referenced by both the investment withdraw check and the purchase cap below
 
   // --- Milestones -----------------------------------------------------------
@@ -405,10 +395,16 @@
       return act(adapter, 'btnBuyWire', 'economy',
         'Restocking wire at any price (' + wireNow.minutes.toFixed(2) + ' min of production left).');
     }
+    // Pre-buy only once the investment-engine era has started and there's
+    // real wealth (run E1, RUNS.md: with just a 3x-cost cushion this rule
+    // drained every early dollar into wire inventory - a ~15% cost saving -
+    // before clippers could compound - a >100%/cycle return. Cheap wire is
+    // strictly a surplus-cash optimization).
     if (humanFlag === 1 && !wireShortage &&
+        g('investmentEngineFlag') === 1 &&
         wireNow.delta <= WIRE_CHEAP_DELTA &&
         wireNow.minutes < WIRE_RESERVE_TARGET_MIN &&
-        g('funds') >= wireNow.cost * 3 &&
+        g('funds') >= wireNow.cost * 10 &&
         adapter.isClickable('btnBuyWire')) {
       return act(adapter, 'btnBuyWire', 'economy',
         'Pre-buying wire in a price trough ($' + wireNow.cost + ' vs base $' + wireNow.base.toFixed(0) +
@@ -664,12 +660,12 @@
     // end-of-stage-1 shape (~25 processors, rest memory).
     var PROCESSOR_TARGET = 25;
     if (g('trust') > g('processors') + g('memory')) {
+      // Run E1 (RUNS.md) killed the mem-first experiment: starting memory-
+      // heavy left the run on 1 processor until t=6,300s - no ops regen, no
+      // creativity, every project gated. The original proc-6-first shape
+      // (best observed trading split, 1,475s in C1) restored.
       var procNow = g('processors'), memNow = g('memory');
-      var wantProc;
-      if (memNow < 12) wantProc = false; // 10k=trading, 12k=Strategic Modeling (the yomi engine funds everything)
-      else if (procNow < 5) wantProc = true; // quantum gate + creativity trickle
-      else if (procNow < 10) wantProc = true; // creativity rate (New Slogan/Catchy Jingle demand multipliers)
-      else wantProc = procNow < PROCESSOR_TARGET && procNow <= memNow / 3;
+      var wantProc = procNow < 6 || (procNow < PROCESSOR_TARGET && procNow <= memNow / 10);
       var procId = wantProc ? 'btnAddProc' : 'btnAddMem';
       if (adapter.isClickable(procId)) {
         return act(adapter, procId, 'compute',
@@ -732,7 +728,13 @@
     if (humanFlag === 1 && g('clipRate') > 0) {
       var wireSupply = g('wireSupply');
       var costPerClip = wireSupply > 0 ? g('wireCost') / wireSupply : 0;
-      var minProfitableMargin = Math.max(0.01, costPerClip * 1.1); // 10% over material cost
+      // Profit-max floor, not just break-even: sales scale as demand^2.15
+      // and demand ~ 1/margin, so when demand can't absorb production,
+      // profit (m-c)*m^-2.15 peaks at m* = 2.15c/(2.15-1) = 1.87c. Below
+      // that, cutting price buys volume worth less than the margin given
+      // up. (The old 1.1c floor left ~40% of achievable profit on the
+      // table in the wire-cost-dominated early game - run F1, RUNS.md.)
+      var minProfitableMargin = Math.max(0.01, costPerClip * (SALES_EXPONENT / (SALES_EXPONENT - 1)));
       var demandConstant = g('demand') * g('margin'); // invariant under margin changes at a fixed instant
       var targetDemand = demandForSalesRate(g('clipRate'));
       var targetMargin = targetDemand > 0 ? demandConstant / targetDemand : minProfitableMargin;
@@ -805,9 +807,17 @@
         var giftBtn = g('memory') < 125 ? 'btnAddMem' : 'btnAddProc';
         if (adapter.isClickable(giftBtn)) {
           return act(adapter, giftBtn, 'stage2',
-            'Spending a swarm gift on ' + (giftBtn === 'btnAddMem' ? 'memory (' + g('memory') + '/125 toward the 120k-ops Space Exploration gate)' : 'a processor') + '.');
+            'Spending a swarm gift on ' + (giftBtn === 'btnAddMem' ? 'memory (' + g('memory') + '/125 toward the 120k-ops Space Exploration gate)' : 'a processor (creativity for Momentum/Entertain)') + '.');
         }
       }
+      var computeHungry = g('memory') < 125 || g('processors') < 40;
+      var exodus = g('availableMatter') <= 0; // Earth harvested clean - but see workDone below
+      // Run H1 (RUNS.md): "exodus -> think full-time" froze the run 0.3e27
+      // clips short of Space Exploration's 5e27 - wire DRONES still had
+      // 2.3e27 grams of acquiredMatter backlog to convert (processMatter is
+      // scaled by the same work multiplier), and slider 200 zeroes work.
+      // The swarm's work is only done when the backlog is drained too.
+      var workDone = exodus && g('acquiredMatter') < 1e15;
 
       // -- Swarm work/think slider: sliderPos throttles DRONES only
       // (acquireMatter/processMatter scale by (200-sliderPos)/100;
@@ -822,8 +832,9 @@
       var clipsPerSec = g('powMod') * fbst * Math.floor(factoryLevel) * g('factoryRate') * 100; // 100 ticks/sec
       var wireBufferSec = clipsPerSec > 0 ? g('wire') / clipsPerSec : Infinity;
       if (swarmFlag === 1) {
-        var desiredSlider = (g('memory') < 125 && wireBufferSec > 240) ? 200
-          : (g('memory') < 125 && wireBufferSec > 60) ? 100 : 0;
+        var desiredSlider = workDone ? 200 // harvest AND backlog finished, think full-time
+          : (computeHungry && !exodus && wireBufferSec > 240) ? 200
+          : (computeHungry && !exodus && wireBufferSec > 60) ? 100 : 0;
         if (Math.abs((g('sliderPos') || 0) - desiredSlider) > 5) {
           return actSetValue(adapter, 'slider', desiredSlider, 'stage2',
             'Swarm slider -> ' + desiredSlider + ' (' + (desiredSlider > 0 ? 'THINK: gifts toward memory ' + g('memory') + '/125, wire buffer ' + Math.round(wireBufferSec) + 's is fat' : 'WORK: full drone output') + ').');
@@ -861,7 +872,6 @@
       // bank once the factory economy is established (or immediately in
       // exodus), never before the first few factories exist.
       var batteryTarget = 1000;
-      var exodus = g('availableMatter') <= 0;
       if ((exodus || factoryLevel >= 10) && batteryLevel < batteryTarget) {
         var batPick = biggestAffordable(adapter, [['btnBatteryx100', 100], ['btnBatteryx10', 10], ['btnMakeBattery', 1]]);
         if (batPick) {
@@ -879,55 +889,107 @@
         }
       }
 
-      // -- Core budget: factories are the only clip producers, so they get
-      // priority whenever the wire buffer is healthy; drones exist to keep
-      // that buffer from draining (harvest matter -> wire). The old
-      // "whichever is affordable" rule starved factories forever: drone
-      // costs scale as (level+1)^2.25*1e6, so there was ALWAYS an affordable
-      // drone eating the budget before unusedClips could reach factoryCost.
-      // exodus (availableMatter==0): harvesters are dead weight; drones stop.
-      if (!exodus && wireBufferSec < 60) {
+      // -- Core budget: HARVEST RATE is the stage-2 clock. availableMatter
+      // is 6e27 grams and acquireMatter() scales as droneBoost * H^2 *
+      // harvesterRate * powMod (quadratic in drone count once Drone
+      // Flocking lands, and powMod grows without bound under Momentum) -
+      // so every spare clip belongs in drones while there's matter left,
+      // with factories bought when the wire buffer says conversion (wire ->
+      // unusedClips, which funds everything) is falling behind. This flips
+      // the original factory-first rule: factories can always catch up
+      // later from the wire stockpile, but harvest time lost is gone.
+      // exodus (availableMatter==0): harvesters are dead weight; all
+      // remaining spend goes to factories to finish converting the pile.
+      // Space Exploration costs 5e27 unusedClips and Earth yields EXACTLY
+      // 6e27 total - the cost must be actively protected once the harvest
+      // nears completion. Run H2 (RUNS.md) died here: an "exodus -> buy
+      // factories to convert faster" rule spent the pile down to 3.9e26
+      // (late factories cost ~1e25 EACH), leaving SE unaffordable forever.
+      // In exodus nothing is worth buying at all: the 200+ existing
+      // factories convert the backlog in seconds, so just hold the pile.
+      if (exodus) {
+        return wait('stage2', 'Exodus: holding ' + g('unusedClips').toExponential(2) +
+          ' unusedClips for Space Exploration (needs 5e27 + 120k ops + 10M MW-s).');
+      }
+      var SE_RESERVE = 5.05e27;
+      var nearSE = g('clips') >= 5.2e27; // most of Earth's 6e27 already harvested
+      if (wireBufferSec < 600) {
         var dronePick = pickDroneBuy(adapter, g, harvesterLevel, wireDroneLevel);
         if (dronePick) {
           return act(adapter, dronePick[0], 'stage2',
             'Buying ' + dronePick[1] + 'x ' + (dronePick[2] ? 'Harvester' : 'Wire Drone') +
-            ' (wire buffer ' + Math.round(wireBufferSec) + 's < 60s target; h=' + harvesterLevel + ' w=' + wireDroneLevel + ').');
+            ' (harvest is the clock; buffer ' + Math.round(wireBufferSec) + 's; h=' + harvesterLevel + ' w=' + wireDroneLevel + ').');
         }
       }
-      if (adapter.isClickable('btnMakeFactory')) {
+      if (adapter.isClickable('btnMakeFactory') &&
+          (!nearSE || g('unusedClips') - g('factoryCost') >= SE_RESERVE)) {
         return act(adapter, 'btnMakeFactory', 'stage2',
-          'Buying a Factory (wire buffer ' + (wireBufferSec === Infinity ? 'inf' : Math.round(wireBufferSec) + 's') + ' - the budget priority).');
+          'Buying a Factory (wire buffer ' + (wireBufferSec === Infinity ? 'inf' : Math.round(wireBufferSec) + 's') +
+          ' > 600s - conversion falling behind' + (nearSE ? '; SE reserve protected' : '') + ').');
       }
-      // Factory unaffordable and buffer merely "not urgent": top up drones
-      // toward a fatter buffer only while matter remains and the factory
-      // fund wouldn't be set back much (drones cost a fraction of a factory).
-      if (!exodus && wireBufferSec < 300 && g('unusedClips') < g('factoryCost') * 0.5) {
-        var dronePick2 = pickDroneBuy(adapter, g, harvesterLevel, wireDroneLevel);
-        if (dronePick2) {
-          return act(adapter, dronePick2[0], 'stage2',
-            'Topping up drones (buffer ' + Math.round(wireBufferSec) + 's; factory fund far off at ' +
-            Math.round(100 * g('unusedClips') / g('factoryCost')) + '%).');
-        }
-      }
-      return wait('stage2', 'Saving unusedClips for the next Factory (' +
+      return wait('stage2', 'Accumulating unusedClips (factory ' +
         Math.round(100 * g('unusedClips') / g('factoryCost')) + '% funded; wire buffer ' +
-        (wireBufferSec === Infinity ? 'inf' : Math.round(wireBufferSec) + 's').toString() + ').');
+        (wireBufferSec === Infinity ? 'inf' : Math.round(wireBufferSec) + 's').toString() +
+        (nearSE ? '; SE reserve 5.05e27 protected' : '') + ').');
     }
 
-    // 14. Stage 3: launch probes, allocate stat points, buy more probe trust.
+    // 14. Stage 3: probes convert the universe. Design principles (community
+    // guide + ROUTES.md): self-replication is the exponential engine, hazard
+    // remediation keeps drift losses survivable, exactly one point each in
+    // fac/harv/wire lets the fleet spawn the space factories/drones that
+    // actually make clips (spawnFactories/spawnHarvesters/spawnWireDrones
+    // are gated on those stats being nonzero), combat matters once drifters
+    // start fighting (button only exists after its project), and speed/nav
+    // stay 0 (their only real consumer is the banned OODA Loop path).
     if (g('spaceFlag') === 1) {
-      if (adapter.isClickable('btnMakeProbe')) {
-        return act(adapter, 'btnMakeProbe', 'stage3', 'Launching a probe.');
+      // Swarm slider back to WORK: acquireMatter()/processMatter() run in
+      // stage 3 too (humanFlag==0), scaled by the same (200-slider)/100 -
+      // the space drone fleet is millions strong, so work >> think here;
+      // leaving the exodus-era 200 would zero all matter conversion.
+      if (g('swarmFlag') === 1 && (g('sliderPos') || 0) > 5) {
+        return actSetValue(adapter, 'slider', 0, 'stage3', 'Swarm slider -> 0 (WORK: space drone fleet converts the universe).');
       }
-      for (var b3 = 0; b3 < PROBE_STAT_BUTTONS.length; b3++) {
-        if (adapter.isClickable(PROBE_STAT_BUTTONS[b3])) {
-          return act(adapter, PROBE_STAT_BUTTONS[b3], 'stage3',
-            'Allocating a probe stat point (naive fixed priority: combat > hazard > speed > nav > rep > fac > harv; ' +
-            'OQ3/C3 not yet resolved).');
+      // Swarm gifts keep arriving once Swarm Computing reconnects
+      // (project130); memory raises the ops ceiling for the 100k-200k+
+      // late-game projects, processors raise creativity for Threnody.
+      if (g('swarmGifts') > 0) {
+        var giftBtn3 = g('memory') < 250 ? 'btnAddMem' : 'btnAddProc';
+        if (adapter.isClickable(giftBtn3)) {
+          return act(adapter, giftBtn3, 'stage3', 'Spending a swarm gift on ' + (giftBtn3 === 'btnAddMem' ? 'memory' : 'a processor') + '.');
         }
       }
-      if (adapter.isClickable('btnIncreaseProbeTrust')) {
-        return act(adapter, 'btnIncreaseProbeTrust', 'stage3', 'Buying more probe stat points with yomi.');
+      // maxTrust +10 per 91,117.99 honor (the guide's honor target is
+      // exactly this constant) - more design space for rep/combat.
+      if (adapter.isClickable('btnIncreaseMaxTrust')) {
+        return act(adapter, 'btnIncreaseMaxTrust', 'stage3', 'Raising max trust (+10) for 91,118 honor.');
+      }
+      if (g('probeTrust') < g('maxTrust') && adapter.isClickable('btnIncreaseProbeTrust')) {
+        return act(adapter, 'btnIncreaseProbeTrust', 'stage3',
+          'Buying probe trust with yomi (' + g('probeTrust') + '/' + g('maxTrust') + ').');
+      }
+      // Target-driven stat allocation, in priority order. Combat's entry is
+      // skipped harmlessly until its button exists. Later duplicate entries
+      // deepen a stat once earlier targets are met (haz 2 -> rep 5 ->
+      // combat 5 -> haz 3 -> fac/harv/wire 1 -> rep uncapped).
+      var PLAN = [
+        ['probeHaz', 'btnRaiseProbeHaz', 2],
+        ['probeRep', 'btnRaiseProbeRep', 5],
+        ['probeCombat', 'btnRaiseProbeCombat', 5],
+        ['probeHaz', 'btnRaiseProbeHaz', 3],
+        ['probeFac', 'btnRaiseProbeFac', 1],
+        ['probeHarv', 'btnRaiseProbeHarv', 1],
+        ['probeWire', 'btnRaiseProbeWire', 1],
+        ['probeRep', 'btnRaiseProbeRep', 9999],
+      ];
+      for (var p3 = 0; p3 < PLAN.length; p3++) {
+        if ((g(PLAN[p3][0]) || 0) < PLAN[p3][2] && adapter.isClickable(PLAN[p3][1])) {
+          return act(adapter, PLAN[p3][1], 'stage3',
+            'Probe design: ' + PLAN[p3][0] + ' -> ' + ((g(PLAN[p3][0]) || 0) + 1) +
+            ' (plan: haz2, rep5, combat5, haz3, fac/harv/wire 1, rest rep).');
+        }
+      }
+      if (adapter.isClickable('btnMakeProbe')) {
+        return act(adapter, 'btnMakeProbe', 'stage3', 'Launching a probe (replication does the real scaling).');
       }
     }
 
