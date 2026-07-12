@@ -54,6 +54,69 @@
   display: block;
 }
 
+#botSpeed {
+  font-size: 11px;
+  background: #333;
+  color: #e0e0e0;
+  border: 1px solid #666;
+  border-radius: 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+#botSpeedLabel {
+  margin-left: 12px;
+  display: inline !important;
+}
+
+#botEpoch {
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+#botEpoch .label {
+  font-size: 11px;
+  color: #999;
+  margin-right: 6px;
+}
+#botEpochValue {
+  color: #ffd07f;
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+#botWireValue {
+  display: block;
+  color: #999;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+#botMilestones {
+  border-top: 1px solid #444;
+  padding: 6px 0;
+  margin-bottom: 4px;
+}
+#botMilestones .label {
+  font-size: 11px;
+  color: #999;
+  margin-bottom: 4px;
+}
+#botMilestones .ms {
+  display: flex;
+  justify-content: space-between;
+  padding: 1px 0;
+  font-size: 11px;
+}
+#botMilestones .ms-times {
+  font-variant-numeric: tabular-nums;
+  color: #888;
+}
+#botMilestones .ms-ahead .ms-name { color: #7fff9e; }
+#botMilestones .ms-ahead .ms-times { color: #7fff9e; }
+#botMilestones .ms-behind .ms-name { color: #ff9e7f; }
+#botMilestones .ms-behind .ms-times { color: #ff9e7f; }
+#botMilestones .ms-pending .ms-name { color: #777; }
+
 #botDecision {
   background: #2a2a2a;
   border-left: 3px solid #7fd0ff;

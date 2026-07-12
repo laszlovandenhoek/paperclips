@@ -5,13 +5,20 @@
 // (77,991 ticks/sec last measured, vs the game's native 100 ticks/sec).
 //
 // Usage: node bot/run-headless.js [maxGameSeconds] [seed]
+//
+// Default cap is 3 simulated hours (10,800s): the Any% Desktop world record
+// is 5,662s (1h34m22s), so any run that needs more than ~2x that time has
+// already failed as a record attempt and the interesting data is WHERE it
+// fell behind (see the milestone split table printed at the end, and
+// RUNS.md for the run-by-run iteration log).
 'use strict';
 
 const { Sim } = require('../sim/harness');
 const { SimAdapter } = require('./adapters/sim-adapter');
 const policy = require('./policy');
 
-const MAX_GAME_SECONDS = process.argv[2] ? parseInt(process.argv[2], 10) : 3600 * 24 * 7; // 1 sim-week default cap
+const WR_SECONDS = 5662;
+const MAX_GAME_SECONDS = process.argv[2] ? parseInt(process.argv[2], 10) : 3 * 3600;
 const SEED = process.argv[3] ? parseInt(process.argv[3], 10) : 1;
 // decide() reads a couple dozen game variables through the sim's eval-based
 // Proxy (bot/adapters/sim-adapter.js), which - unlike the game's own native
@@ -47,10 +54,15 @@ while (sim.now < MAX_GAME_SECONDS * 1000) {
   if (gameSecond !== lastLogSecond && gameSecond % 60 === 0) {
     lastLogSecond = gameSecond;
     const c = sim.ctx;
+    const epoch = policy.currentEpoch((name) => c[name]);
     console.log(
-      `[t=${gameSecond}s] clips=${Math.floor(c.clips)} trust=${c.trust} funds=${c.funds.toFixed(0)} ` +
-      `humanFlag=${c.humanFlag} spaceFlag=${c.spaceFlag} dismantle=${c.dismantle} milestoneFlag=${c.milestoneFlag} ` +
-      `actions=${totalActions}`
+      `[t=${gameSecond}s] epoch=${epoch} clips=${c.clips.toExponential(2)} trust=${c.trust} ` +
+      `funds=${c.funds.toFixed(0)} port=${Math.round(c.portTotal)} yomi=${Math.round(c.yomi)} ` +
+      `mem=${c.memory} proc=${c.processors} marketing=${c.marketingLvl} megas=${c.megaClipperLevel} ` +
+      `factories=${c.factoryLevel} drones=${c.harvesterLevel + c.wireDroneLevel} ` +
+      `batteries=${c.batteryLevel} storedPower=${Math.round(c.storedPower / 1e6)}M ` +
+      `matter=${c.availableMatter > 0 ? c.availableMatter.toExponential(1) : 0} ` +
+      `probes=${c.probeCount > 0 ? c.probeCount.toExponential(1) : 0} actions=${totalActions}`
     );
   }
 
@@ -65,10 +77,29 @@ while (sim.now < MAX_GAME_SECONDS * 1000) {
 }
 
 const wallMs = Date.now() - t0;
+const finalSeconds = sim.now / 1000;
 console.log('\n=== run complete ===');
 console.log('finished:', finished, stuckReason ? `(${stuckReason})` : '');
-console.log(`simulated ${(sim.now / 1000).toFixed(1)}s of game time in ${(wallMs / 1000).toFixed(1)}s wall time ` +
+console.log(`simulated ${finalSeconds.toFixed(1)}s of game time in ${(wallMs / 1000).toFixed(1)}s wall time ` +
   `(${(sim.now / wallMs).toFixed(0)}x real time)`);
-console.log('total bot actions:', totalActions);
+if (finished) {
+  const delta = finalSeconds - WR_SECONDS;
+  console.log(delta < 0
+    ? `*** BEAT THE WORLD RECORD by ${(-delta).toFixed(1)}s (${finalSeconds.toFixed(1)}s vs ${WR_SECONDS}s) ***`
+    : `world record missed by ${delta.toFixed(1)}s (${finalSeconds.toFixed(1)}s vs ${WR_SECONDS}s)`);
+}
+
+// Milestone split table: actual vs target, the core iteration feedback.
+console.log('\nmilestone splits (target vs actual):');
+const times = adapter.__milestoneTimes || {};
+for (const m of policy.MILESTONES) {
+  const at = times[m.id];
+  const actual = at !== undefined ? `${(at / 1000).toFixed(0)}s` : '--';
+  const verdict = at === undefined ? 'NOT REACHED'
+    : (at / 1000 <= m.targetSec ? `ahead by ${(m.targetSec - at / 1000).toFixed(0)}s` : `BEHIND by ${(at / 1000 - m.targetSec).toFixed(0)}s`);
+  console.log(`  ${m.label.padEnd(30)} target ${String(m.targetSec).padStart(5)}s  actual ${actual.padStart(7)}  ${verdict}`);
+}
+
+console.log('\ntotal bot actions:', totalActions);
 console.log('actions by phase:', phaseCounts);
 console.log('final snapshot:', sim.snapshot());

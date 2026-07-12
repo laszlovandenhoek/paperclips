@@ -66,6 +66,12 @@
   };
 
   BrowserAdapter.prototype.now = function () {
+    // Under fast-forward (bot/timewarp.js) the virtual game clock is the
+    // truthful one: rate-limiting clicks against it keeps the budget at 30
+    // clicks per GAME second at any speed multiplier, so warped runs stay
+    // comparable to real-time ones (and to the headless sim, whose adapter
+    // enforces the same cap against sim time).
+    if (this.win.PaperclipsTimeWarp) return this.win.PaperclipsTimeWarp.now();
     return (this.win.performance && this.win.performance.now) ? this.win.performance.now() : Date.now();
   };
 
