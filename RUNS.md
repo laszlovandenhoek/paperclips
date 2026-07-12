@@ -107,6 +107,31 @@ set the slider to 200, which zeroes the WORK multiplier — and wire drones stil
 2.3×10²⁷ grams of acquiredMatter backlog to convert. Fix: think-full-time only when
 the backlog is drained too.
 
+### H3 — seed 1, 14,400s cap — **Space Exploration at 10,758s**; stage-3 fleet died 6x
+
+Stage 3 entered for the first time. Then: probes 39k → 12, clips frozen, memory
+125 → 65 (the "Memory release" bailout project fired six times — once per fleet
+death). Root causes from source: (1) exploreUniverse's rate is probeCount ×
+probeSpeed × **probeNav** — multiplicative, and the plan had both at 0, so no new
+matter was ever found; (2) drift = probeCount × 1e-6 × probeTrust^1.2, and greedy
+trust-maxing to 20 meant 36x base drift; (3) hazards at probeHaz 0 kill 1%/TICK.
+Fixes: survival-first plan (haz → rep → speed/nav 1 each → deepen), just-in-time
+probe-trust purchases (banked trust is pure drift), quantum pump extended to stage 3.
+
+### I1/I2 — seed 1 — fleet SURVIVES; the drift-war economy is the new clock
+
+I1: fleet sustains 2-3e7 probes but oscillates (equilibrium, not growth); clips grow
+linearly via spawned infra — hopeless against totalMatter 3e55. I2 (slider 100 until
+memory 250): Combat/Monument ops gates passable, honor climbing via battle wins
+(+13/s) — but drifters hit 7×10⁸ (every drift loss is an enemy reinforcement) and
+projected finish ~22,000s+. Honor mechanics from source: battles pay NOTHING (and
+LOSSES subtract honor) until Name the Battles (requires losing 10M probes, 225k
+creativity); then Threnody (+10k honor, escalating creativity+yomi cost, repeatable)
+is the honor engine; Monument +50k (250k ops, 5e31 clips); maxTrust +10 per 91,118.
+Change: stat plan rebudgeted for the ladder — first 20 trust = speed1/nav1/haz5/
+rep8/combat5 (combat converts the bleed into honor), fac/harv/wire deferred to the
+30-tier (spawn rates scale with probeCount, so fleet-first multiplies them later).
+
 ### H2 — seed 1 — backlog converts (clips = full 6.00×10²⁷), new blocker: the pile got spent
 
 Space Exploration stayed unbuyable: diagnostic showed unusedClips at 3.9×10²⁶ —

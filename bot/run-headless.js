@@ -62,7 +62,9 @@ while (sim.now < MAX_GAME_SECONDS * 1000) {
       `factories=${c.factoryLevel} drones=${c.harvesterLevel + c.wireDroneLevel} ` +
       `batteries=${c.batteryLevel} storedPower=${Math.round(c.storedPower / 1e6)}M ` +
       `matter=${c.availableMatter > 0 ? c.availableMatter.toExponential(1) : 0} ` +
-      `probes=${c.probeCount > 0 ? c.probeCount.toExponential(1) : 0} actions=${totalActions}`
+      `probes=${c.probeCount > 0 ? c.probeCount.toExponential(1) : 0} ` +
+      `drifters=${c.drifterCount > 0 ? c.drifterCount.toExponential(1) : 0} ` +
+      `unused=${c.unusedClips > 0 ? c.unusedClips.toExponential(1) : 0} honor=${Math.round(c.honor)} actions=${totalActions}`
     );
   }
 
