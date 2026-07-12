@@ -701,7 +701,7 @@
       // tempOps overflow (a few thousand at saturation, given qComp()'s
       // damper) is exactly the top-up that closes the gap - so there,
       // clicking at the cap is the point, not a waste.
-      var wantOverflowPump = humanFlag === 0 && g('spaceFlag') === 0;
+      var wantOverflowPump = humanFlag === 0; // stages 2 AND 3 both have ops gates near/above the memory cap
       if (qActiveCount > 0 && qSum >= qActiveCount * 0.6 && (headroom > 50 || wantOverflowPump)) {
         return act(adapter, 'btnQcompute', 'quantum',
           'Clicking quantum compute (signal ' + qSum.toFixed(2) + '/' + qActiveCount +
@@ -942,12 +942,19 @@
     // start fighting (button only exists after its project), and speed/nav
     // stay 0 (their only real consumer is the banned OODA Loop path).
     if (g('spaceFlag') === 1) {
-      // Swarm slider back to WORK: acquireMatter()/processMatter() run in
-      // stage 3 too (humanFlag==0), scaled by the same (200-slider)/100 -
-      // the space drone fleet is millions strong, so work >> think here;
-      // leaving the exodus-era 200 would zero all matter conversion.
-      if (g('swarmFlag') === 1 && (g('sliderPos') || 0) > 5) {
-        return actSetValue(adapter, 'slider', 0, 'stage3', 'Swarm slider -> 0 (WORK: space drone fleet converts the universe).');
+      // Swarm slider: acquireMatter()/processMatter() run in stage 3 too
+      // (humanFlag==0), scaled by the same (200-slider)/100 - but so does
+      // gift generation, and stage 3 has hard memory gates: Combat needs
+      // 150k ops (memory 150) and Monument to the Driftwar Fallen (+50,000
+      // honor toward the 91,118-honor maxTrust ladder) needs 250k (memory
+      // 250). Run I1 (RUNS.md) set slider 0 here and starved the gifts -
+      // the same trap as stage 2, so: half-work until memory 250, then
+      // full work forever (the universe-conversion exponential comes from
+      // probe replication, not this linear drone trickle).
+      var desiredSlider3 = g('memory') < 250 ? 100 : 0;
+      if (g('swarmFlag') === 1 && Math.abs((g('sliderPos') || 0) - desiredSlider3) > 5) {
+        return actSetValue(adapter, 'slider', desiredSlider3, 'stage3',
+          'Swarm slider -> ' + desiredSlider3 + (desiredSlider3 > 0 ? ' (THINK: memory ' + g('memory') + '/250 for Combat 150k / Monument 250k ops)' : ' (WORK: full drone output)') + '.');
       }
       // Swarm gifts keep arriving once Swarm Computing reconnects
       // (project130); memory raises the ops ceiling for the 100k-200k+
@@ -963,30 +970,71 @@
       if (adapter.isClickable('btnIncreaseMaxTrust')) {
         return act(adapter, 'btnIncreaseMaxTrust', 'stage3', 'Raising max trust (+10) for 91,118 honor.');
       }
-      if (g('probeTrust') < g('maxTrust') && adapter.isClickable('btnIncreaseProbeTrust')) {
-        return act(adapter, 'btnIncreaseProbeTrust', 'stage3',
-          'Buying probe trust with yomi (' + g('probeTrust') + '/' + g('maxTrust') + ').');
-      }
-      // Target-driven stat allocation, in priority order. Combat's entry is
-      // skipped harmlessly until its button exists. Later duplicate entries
-      // deepen a stat once earlier targets are met (haz 2 -> rep 5 ->
-      // combat 5 -> haz 3 -> fac/harv/wire 1 -> rep uncapped).
+      // Stat plan, ordered by the actual loss/growth math (run H3 killed
+      // the fleet 6 times - "Memory release" fired repeatedly - by maxing
+      // probeTrust greedily and skipping speed/nav entirely):
+      //   - hazards: probeCount * 0.01/(3*haz^1.6+1) per TICK - 1%/tick at
+      //     haz 0, so haz comes first or launches evaporate in seconds;
+      //   - replication: +0.005%*rep/tick, the exponential engine;
+      //   - exploration: probeXBaseRate * SPEED * NAV (multiplicative!) -
+      //     zero either and no new matter is EVER found (H3's frozen
+      //     clips). The OODA-avoidance lore is about combat bonuses, not
+      //     these baseline 1-point requirements;
+      //   - drift: probeCount * 1e-6 * probeTrust^1.2 - trust 20 means 36x
+      //     base drift, so trust is bought JUST-IN-TIME below, never banked.
+      // Budgeted for the maxTrust ladder (run I2, RUNS.md: fleet oscillated
+      // at 2-5e7 while drifters grew to 7e8 - every drift loss is an enemy
+      // reinforcement, and battles without combat are slaughters). First 20
+      // trust: survival + exploration + enough combat to WIN battles (each
+      // win = honor via Name the Battles, and honor at 91,118 buys maxTrust
+      // +10 = the next tier). fac/harv/wire wait for tier 2 - the already-
+      // spawned infra keeps producing meanwhile, and spawn rates scale with
+      // probeCount anyway, so a bigger fleet first multiplies them later.
       var PLAN = [
         ['probeHaz', 'btnRaiseProbeHaz', 2],
-        ['probeRep', 'btnRaiseProbeRep', 5],
-        ['probeCombat', 'btnRaiseProbeCombat', 5],
+        ['probeRep', 'btnRaiseProbeRep', 3],
         ['probeHaz', 'btnRaiseProbeHaz', 3],
+        ['probeSpeed', 'btnRaiseProbeSpeed', 1],
+        ['probeNav', 'btnRaiseProbeNav', 1],
+        ['probeRep', 'btnRaiseProbeRep', 6],
+        ['probeCombat', 'btnRaiseProbeCombat', 3],
+        ['probeHaz', 'btnRaiseProbeHaz', 5],
+        ['probeRep', 'btnRaiseProbeRep', 8],
+        ['probeCombat', 'btnRaiseProbeCombat', 5], // = exactly 20 (5+8+1+1+5)
+        ['probeHaz', 'btnRaiseProbeHaz', 7],
+        ['probeRep', 'btnRaiseProbeRep', 10],
+        ['probeCombat', 'btnRaiseProbeCombat', 6],
         ['probeFac', 'btnRaiseProbeFac', 1],
         ['probeHarv', 'btnRaiseProbeHarv', 1],
-        ['probeWire', 'btnRaiseProbeWire', 1],
+        ['probeWire', 'btnRaiseProbeWire', 1], // = 27 of the 30 tier
+        ['probeRep', 'btnRaiseProbeRep', 12],
+        ['probeHaz', 'btnRaiseProbeHaz', 8],
+        ['probeCombat', 'btnRaiseProbeCombat', 8],
         ['probeRep', 'btnRaiseProbeRep', 9999],
       ];
+      var nextStat = null;
       for (var p3 = 0; p3 < PLAN.length; p3++) {
-        if ((g(PLAN[p3][0]) || 0) < PLAN[p3][2] && adapter.isClickable(PLAN[p3][1])) {
-          return act(adapter, PLAN[p3][1], 'stage3',
-            'Probe design: ' + PLAN[p3][0] + ' -> ' + ((g(PLAN[p3][0]) || 0) + 1) +
-            ' (plan: haz2, rep5, combat5, haz3, fac/harv/wire 1, rest rep).');
+        if ((g(PLAN[p3][0]) || 0) < PLAN[p3][2]) {
+          // Combat's button doesn't exist until its project; skip past it
+          // rather than stalling the whole plan on it.
+          if (PLAN[p3][0] === 'probeCombat' && !adapter.isClickable(PLAN[p3][1]) &&
+              g('probeUsedTrust') < g('probeTrust')) continue;
+          nextStat = PLAN[p3];
+          break;
         }
+      }
+      if (nextStat && adapter.isClickable(nextStat[1])) {
+        return act(adapter, nextStat[1], 'stage3',
+          'Probe design: ' + nextStat[0] + ' -> ' + ((g(nextStat[0]) || 0) + 1) +
+          ' (survival-first plan; drift scales with trust^1.2 so trust stays just-in-time).');
+      }
+      // Just-in-time trust: only when every point is spent AND the plan
+      // wants another - banked trust is pure drift.
+      if (nextStat && g('probeUsedTrust') >= g('probeTrust') &&
+          g('probeTrust') < g('maxTrust') && adapter.isClickable('btnIncreaseProbeTrust')) {
+        return act(adapter, 'btnIncreaseProbeTrust', 'stage3',
+          'Buying probe trust just-in-time for ' + nextStat[0] + ' (' + g('probeTrust') + '/' + g('maxTrust') +
+          '; drift ~ trust^1.2, never bank it).');
       }
       if (adapter.isClickable('btnMakeProbe')) {
         return act(adapter, 'btnMakeProbe', 'stage3', 'Launching a probe (replication does the real scaling).');
