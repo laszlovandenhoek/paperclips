@@ -545,7 +545,15 @@
     // this replaces hand-tuned ordering with the actual economics, and
     // naturally handles both regimes (early: clippers pay back in seconds;
     // saturated: marketing is the only thing worth money).
-    if (humanFlag === 1 && !wireShortage) {
+    // Engine-era austerity (first-full-run analysis, RUNS.md): once the
+    // investment engine has a few threshold upgrades it compounds at
+    // ~0.2-0.3%/s - megaclippers/marketing return ~0.01%/s of their cost.
+    // Every dollar diverted from deposits then DELAYS Takeover/Monopoly/
+    // tokens, the actual stage-1 exit chain. Production keeps running on
+    // existing clippers (fib-trust needs clips flowing, and the 101M-clip
+    // token trigger), so only NEW purchases stop.
+    var engineDominates = humanFlag === 1 && g('investLevel') >= 3 && g('investmentEngineFlag') === 1;
+    if (humanFlag === 1 && !wireShortage && !engineDominates) {
       var margin6 = g('margin');
       var ws6 = g('wireSupply');
       var cpc6 = ws6 > 0 ? g('wireCost') / ws6 : 0; // wire cost per clip
@@ -951,7 +959,10 @@
       // the same trap as stage 2, so: half-work until memory 250, then
       // full work forever (the universe-conversion exponential comes from
       // probe replication, not this linear drone trickle).
-      var desiredSlider3 = g('memory') < 250 ? 100 : 0;
+      // Full work until the fleet is self-sustaining (~1e6 probes) - the
+      // memory gates (Combat 150k, Monument 250k) only matter once battles
+      // rage, and throttling the early drone trickle delays fleet ignition.
+      var desiredSlider3 = (g('memory') < 250 && g('probeCount') > 1e6) ? 100 : 0;
       if (g('swarmFlag') === 1 && Math.abs((g('sliderPos') || 0) - desiredSlider3) > 5) {
         return actSetValue(adapter, 'slider', desiredSlider3, 'stage3',
           'Swarm slider -> ' + desiredSlider3 + (desiredSlider3 > 0 ? ' (THINK: memory ' + g('memory') + '/250 for Combat 150k / Monument 250k ops)' : ' (WORK: full drone output)') + '.');
@@ -990,6 +1001,13 @@
       // +10 = the next tier). fac/harv/wire wait for tier 2 - the already-
       // spawned infra keeps producing meanwhile, and spawn rates scale with
       // probeCount anyway, so a bigger fleet first multiplies them later.
+      // Tier-20 MUST contain the full production loop (run J1, RUNS.md:
+      // deferring fac/harv/wire to tier 30 meant no space drones ever
+      // spawned, 8.2e31 of explored matter sat unharvestable, and the
+      // fleet ate the clip pile - every birth costs 1e17 unusedClips -
+      // down to nothing and went extinct. Probes are not just an army,
+      // they're the only thing that seeds the space economy that feeds
+      // their own replication).
       var PLAN = [
         ['probeHaz', 'btnRaiseProbeHaz', 2],
         ['probeRep', 'btnRaiseProbeRep', 3],
@@ -997,19 +1015,18 @@
         ['probeSpeed', 'btnRaiseProbeSpeed', 1],
         ['probeNav', 'btnRaiseProbeNav', 1],
         ['probeRep', 'btnRaiseProbeRep', 6],
-        ['probeCombat', 'btnRaiseProbeCombat', 3],
-        ['probeHaz', 'btnRaiseProbeHaz', 5],
-        ['probeRep', 'btnRaiseProbeRep', 8],
-        ['probeCombat', 'btnRaiseProbeCombat', 5], // = exactly 20 (5+8+1+1+5)
-        ['probeHaz', 'btnRaiseProbeHaz', 7],
-        ['probeRep', 'btnRaiseProbeRep', 10],
-        ['probeCombat', 'btnRaiseProbeCombat', 6],
         ['probeFac', 'btnRaiseProbeFac', 1],
         ['probeHarv', 'btnRaiseProbeHarv', 1],
-        ['probeWire', 'btnRaiseProbeWire', 1], // = 27 of the 30 tier
-        ['probeRep', 'btnRaiseProbeRep', 12],
-        ['probeHaz', 'btnRaiseProbeHaz', 8],
-        ['probeCombat', 'btnRaiseProbeCombat', 8],
+        ['probeWire', 'btnRaiseProbeWire', 1],
+        ['probeCombat', 'btnRaiseProbeCombat', 3],
+        ['probeRep', 'btnRaiseProbeRep', 8],
+        ['probeHaz', 'btnRaiseProbeHaz', 4], // = exactly 20 (4+8+1+1+1+1+1+3)
+        ['probeRep', 'btnRaiseProbeRep', 10],
+        ['probeHaz', 'btnRaiseProbeHaz', 6],
+        ['probeCombat', 'btnRaiseProbeCombat', 5],
+        ['probeRep', 'btnRaiseProbeRep', 12], // = 28 of the 30 tier
+        ['probeHaz', 'btnRaiseProbeHaz', 7],
+        ['probeCombat', 'btnRaiseProbeCombat', 6],
         ['probeRep', 'btnRaiseProbeRep', 9999],
       ];
       var nextStat = null;
