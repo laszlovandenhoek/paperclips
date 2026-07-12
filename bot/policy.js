@@ -38,7 +38,14 @@
   // a display toggle - ROUTES.md P3). Accept (projectButton147): never taken
   // for a single completion (P1/C1 - prestige loop is dominated). Reject
   // (projectButton148): the only path to actually finishing, always prioritized.
-  var NEVER_TAKE_PROJECTS = ['projectButton42'];
+  // Community speedrun guide's avoid-list, added after confirming each in
+  // projects.js: AutoTourney (118, 50k creativity for automation that would
+  // override our per-grid adaptive pick - P3's whole ~24-48% yomi edge),
+  // The OODA Loop (120, 175k ops + 45k yomi to boost probe speed/nav, both
+  // of which we run at 0), Glory (134, 200k ops + 30k yomi for a combat
+  // bonus the guide rates a waste). Threnody (133) deliberately NOT listed:
+  // it's the honor source that raises maxTrust in stage 3.
+  var NEVER_TAKE_PROJECTS = ['projectButton42', 'projectButton118', 'projectButton120', 'projectButton134'];
   var ACCEPT_ID = 'projectButton147';
   var REJECT_ID = 'projectButton148';
 
@@ -215,8 +222,138 @@
 
   var AUTOCLIPPER_CAP = 75; // community speedrun guide; referenced by both the investment withdraw check and the purchase cap below
 
+  // --- Milestones -----------------------------------------------------------
+  // Target times are paced against the Any% Desktop world record (5,662s =
+  // 1h34m22s, speedrun.com - see WIP.md) with a little slack per split.
+  // These are OUR schedule targets, not the game's own milestoneFlag
+  // thresholds - the panel and the headless runner both render actual-vs-
+  // target so it's obvious which phase of a run is losing time.
+  var MILESTONES = [
+    { id: 'trading', label: 'Algorithmic Trading', targetSec: 480, reached: function (g) { return g('investmentEngineFlag') === 1; } },
+    { id: 'clips100k', label: '100k clips', targetSec: 720, reached: function (g) { return g('clips') >= 1e5; } },
+    { id: 'quantum', label: 'Quantum computing', targetSec: 1200, reached: function (g) { return g('qFlag') === 1; } },
+    { id: 'takeover', label: 'Hostile Takeover', targetSec: 1500, reached: function (g) { var p = g('project37'); return !!(p && p.flag === 1); } },
+    { id: 'monopoly', label: 'Full Monopoly', targetSec: 1800, reached: function (g) { var p = g('project38'); return !!(p && p.flag === 1); } },
+    { id: 'hypno', label: 'HypnoDrones (stage 2)', targetSec: 2700, reached: function (g) { return g('humanFlag') === 0; } },
+    { id: 'factory', label: 'First clip factory', targetSec: 2950, reached: function (g) { return g('humanFlag') === 0 && g('factoryLevel') > 0; } },
+    { id: 'earth', label: 'Earth consumed', targetSec: 4200, reached: function (g) { return g('humanFlag') === 0 && g('availableMatter') <= 0; } },
+    { id: 'space', label: 'Space Exploration (stage 3)', targetSec: 4500, reached: function (g) { return g('spaceFlag') === 1; } },
+    { id: 'universe', label: 'Universe consumed', targetSec: 5300, reached: function (g) { return g('milestoneFlag') >= 15; } },
+    { id: 'credits', label: 'Final clips + Reject', targetSec: 5662, reached: function (g) { return g('dismantle') >= 4 && g('finalClips') >= 100; } },
+  ];
+
+  // First-reached times are recorded per adapter (adapter.now() is virtual
+  // sim time headless, wall/warped time in the browser) so both the panel
+  // and the headless runner can print actual-vs-target splits.
+  function recordMilestones(adapter, g) {
+    var times = adapter.__milestoneTimes || (adapter.__milestoneTimes = {});
+    for (var i = 0; i < MILESTONES.length; i++) {
+      var m = MILESTONES[i];
+      if (times[m.id] === undefined && m.reached(g)) times[m.id] = adapter.now();
+    }
+    return times;
+  }
+
+  // --- Epochs ---------------------------------------------------------------
+  // Coarse phases of a run, used to slot actions "at/before/after" a boundary
+  // (e.g. wire pre-buying matters before the WireBuyer/megaclipper era;
+  // quantum-pumping tempOps matters from the quantum epoch on; swarm think-
+  // vs-work matters only in stage2-buildout). Derived purely from game state
+  // so sim and browser agree with zero extra bookkeeping.
+  function currentEpoch(g) {
+    if (g('spaceFlag') === 1) return g('milestoneFlag') >= 15 ? 'endgame' : 'stage3';
+    if (g('humanFlag') === 0) return g('availableMatter') > 0 ? 'stage2-buildout' : 'stage2-exodus';
+    if (g('qFlag') === 1) return 'quantum';
+    if (g('investmentEngineFlag') === 1) return 'invest';
+    if (g('clipmakerLevel') >= 5) return 'economy';
+    return 'bootstrap';
+  }
+
+  // --- Wire price wave ------------------------------------------------------
+  // adjustWirePrice() (main.js:695-710, called from the 100ms slow loop):
+  // with p=1.5% per call, wireCost = ceil(wireBasePrice + 6*sin(counter)),
+  // counter incrementing once per adjustment - so price swings +/-6 around
+  // base on a ~40s pseudo-period, and the base itself decays 0.1% per 25s
+  // (only while >$15 and no purchases, each purchase adds +$0.05). Both
+  // wireCost and wireBasePrice are plain globals, so "are we in a trough?"
+  // is directly observable - no phase estimation needed.
+  var WIRE_CHEAP_DELTA = -4; // sin < ~ -0.5: bottom third of the wave
+  var WIRE_RESERVE_TARGET_MIN = 10; // stop stockpiling beyond this many minutes of production
+  var WIRE_EMERGENCY_MIN = 0.25; // below this, buy at ANY price (production must not stop)
+  function wireStatus(g) {
+    var clipRate = Math.max(g('clipRate') || 0, 1);
+    var minutes = g('wire') / clipRate / 60;
+    var delta = g('wireCost') - g('wireBasePrice');
+    return {
+      minutes: minutes,
+      cost: g('wireCost'),
+      base: g('wireBasePrice'),
+      delta: delta,
+      verdict: delta <= WIRE_CHEAP_DELTA ? 'cheap' : (delta >= 4 ? 'expensive' : 'fair'),
+    };
+  }
+
+  // --- Stage-2 purchase helpers --------------------------------------------
+  // Multi-buy buttons (x10/x100/x1000 in index2.html) matter at scale: the
+  // 30 clicks/sec budget cannot buy hundreds of thousands of drones one at
+  // a time (that alone would take hours of clicking). Pick the biggest
+  // affordable batch; the game pre-disables each batch button when
+  // unusedClips can't cover it (updateDroneButtons, main.js:2562-2600), so
+  // isClickable() is the affordability check.
+  function biggestAffordable(adapter, ordered) {
+    for (var i = 0; i < ordered.length; i++) {
+      if (adapter.isClickable(ordered[i][0])) return ordered[i];
+    }
+    return null;
+  }
+
+  // Buy whichever drone type is behind, biggest affordable batch. Keeping
+  // the two levels close matters beyond production balance: droneRatio
+  // (max+1)/(min+1) > 1.5 accrues disorganization (main.js:2683-2700) which
+  // eventually stalls all swarm gifts. A transiently large batch on the
+  // lower side is fine (the counter moves at most 0.01/tick and decays as
+  // soon as the other side's batch lands a cycle later); just don't let a
+  // batch overshoot to 3x the other side.
+  function pickDroneBuy(adapter, g, harvesterLevel, wireDroneLevel) {
+    var harvBehind = harvesterLevel <= wireDroneLevel;
+    var lowLevel = harvBehind ? harvesterLevel : wireDroneLevel;
+    var highLevel = harvBehind ? wireDroneLevel : harvesterLevel;
+    var buttons = harvBehind
+      ? [['btnHarvesterx1000', 1000], ['btnHarvesterx100', 100], ['btnHarvesterx10', 10], ['btnMakeHarvester', 1]]
+      : [['btnWireDronex1000', 1000], ['btnWireDronex100', 100], ['btnWireDronex10', 10], ['btnMakeWireDrone', 1]];
+    for (var i = 0; i < buttons.length; i++) {
+      var count = buttons[i][1];
+      if (count > 1 && (lowLevel + count + 1) > (highLevel + 1) * 3 && highLevel > 0) continue;
+      if (adapter.isClickable(buttons[i][0])) return [buttons[i][0], count, harvBehind];
+    }
+    return null;
+  }
+
+  // Full observability snapshot for the panel and headless logging - one
+  // call returns everything the UI shows: epoch, milestone splits, wire
+  // reserve state. Read-only (no clicks), safe to call every frame.
+  function status(adapter) {
+    var g = function (name) { return adapter.get(name); };
+    var times = recordMilestones(adapter, g);
+    var ms = [];
+    for (var i = 0; i < MILESTONES.length; i++) {
+      var m = MILESTONES[i];
+      ms.push({ id: m.id, label: m.label, targetSec: m.targetSec, reachedAtMs: times[m.id] !== undefined ? times[m.id] : null });
+    }
+    return {
+      epoch: currentEpoch(g),
+      milestones: ms,
+      wire: g('humanFlag') === 1 ? wireStatus(g) : null,
+    };
+  }
+
   function decide(adapter) {
     var g = function (name) { return adapter.get(name); };
+
+    // Record milestone first-reached times on every decision cycle, so
+    // split data exists even if nothing ever calls status() (headless runs
+    // print them at the end; the panel renders them live).
+    recordMilestones(adapter, g);
 
     // 1. Endgame: Reject the instant it's available. Never Accept.
     if (adapter.isClickable(REJECT_ID)) {
@@ -252,10 +389,30 @@
     // is low, either buy it, or hold funds and skip straight to bootstrap
     // clicking below (which doesn't cost money - spending down whatever
     // wire is left into sellable clips is still useful while we wait).
+    // Reserve accounting is in MINUTES of production (wire/clipRate/60), not
+    // raw inches - "1000 inches" means 16 minutes at hand-click pace but
+    // 20ms in the megaclipper era, so an absolute threshold can't serve both.
+    // Emergency (reserve nearly empty): buy at ANY price, and gate all other
+    // spending below (the original soft-lock protection). Opportunistic
+    // (price in the sine trough, see wireStatus above): pre-buy up to the
+    // reserve target, but only with a 3x funds cushion so a cheap-wire
+    // window can never starve the next clipper/marketing purchase - beyond
+    // the target the money is better invested than parked in inventory.
     var humanFlag = g('humanFlag');
-    var wireShortage = humanFlag === 1 && g('wire') < 100;
+    var wireNow = wireStatus(g);
+    var wireShortage = humanFlag === 1 && (g('wire') < 100 || wireNow.minutes < WIRE_EMERGENCY_MIN);
     if (wireShortage && adapter.isClickable('btnBuyWire')) {
-      return act(adapter, 'btnBuyWire', 'economy', 'Restocking wire (below 100 inches buffer).');
+      return act(adapter, 'btnBuyWire', 'economy',
+        'Restocking wire at any price (' + wireNow.minutes.toFixed(2) + ' min of production left).');
+    }
+    if (humanFlag === 1 && !wireShortage &&
+        wireNow.delta <= WIRE_CHEAP_DELTA &&
+        wireNow.minutes < WIRE_RESERVE_TARGET_MIN &&
+        g('funds') >= wireNow.cost * 3 &&
+        adapter.isClickable('btnBuyWire')) {
+      return act(adapter, 'btnBuyWire', 'economy',
+        'Pre-buying wire in a price trough ($' + wireNow.cost + ' vs base $' + wireNow.base.toFixed(0) +
+        '; reserve ' + wireNow.minutes.toFixed(1) + '/' + WIRE_RESERVE_TARGET_MIN + ' min).');
     }
 
     // 4. Generic project purchase: trigger-gating in projects.js already
@@ -299,32 +456,36 @@
       var fundsNow = g('funds');
 
       // Withdraw if it would clear a big-ticket funds-gated purchase.
-      // Buffers per the community guide: don't cash out right at the
-      // threshold (leaves nothing invested for next time) - keep a 2x
-      // buffer for the huge one-time projects, no buffer needed for tokens
-      // or the routine autoclipper/megaclipper/marketing purchases (small
-      // relative to the engine's balance, and recurring - the whole point
-      // of running this engine is to fund them, not just the mega-projects).
-      // Without this, once step 7 starts sweeping funds to bankroll every
-      // cycle, `funds` alone would never again reach megaClipperCost/adCost
-      // (only bankroll grows) - only a matching withdraw check unstuck it.
+      // NO buffer on the mega-projects: run A1 (RUNS.md) showed the original
+      // 2x buffer delayed Full Monopoly - the single biggest revenue
+      // multiplier in stage 1 (demandBoost x10) - until t=9,028s, 4x its
+      // target split, because the engine had to grow to $20M before cashing
+      // out for a $10M purchase. The engine refills fast AFTER the demand
+      // boost lands; waiting for a cushion first has the causality backwards.
+      // Full Monopoly's threshold is also gated on its yomi co-requirement
+      // (3,000) being met - without that check, withdraw would fire with
+      // yomi short, step 7 would sweep the cash back in next cycle, and the
+      // two would ping-pong burning the click budget until yomi caught up.
       var withdrawThreshold = null;
       function considerThreshold(t) { if (t !== null && (withdrawThreshold === null || t < withdrawThreshold)) withdrawThreshold = t; }
       var project37 = g('project37'); // Hostile Takeover, $1,000,000
-      var project38 = g('project38'); // Full Monopoly, $10,000,000 (needs project37 first)
+      var project38 = g('project38'); // Full Monopoly, $10,000,000 + 3,000 yomi (needs project37 first)
       var project40 = g('project40'); // A Token of Goodwill, $500,000
       var project40b = g('project40b'); // Another Token of Goodwill, doubles from $1,000,000
-      if (project37 && !project37.flag) considerThreshold(1000000 * 2);
-      else if (project37 && project37.flag && project38 && !project38.flag) considerThreshold(10000000 * 2);
+      if (project37 && !project37.flag) considerThreshold(1000000);
+      else if (project37 && project37.flag && project38 && !project38.flag && g('yomi') >= 3000) considerThreshold(10000000);
       if (project40 && !project40.flag) considerThreshold(500000);
       if (project40 && project40.flag && project40b && !project40b.flag && g('trust') < 100) considerThreshold(g('bribe'));
       if (g('clipmakerLevel') < AUTOCLIPPER_CAP) considerThreshold(g('clipperCost'));
       considerThreshold(g('megaClipperCost'));
       considerThreshold(g('adCost'));
-      if (withdrawThreshold !== null && bankroll > 0 && fundsNow + bankroll >= withdrawThreshold) {
+      if (withdrawThreshold !== null && bankroll > 0 && fundsNow + bankroll >= withdrawThreshold && fundsNow < withdrawThreshold) {
         return act(adapter, 'btnWithdraw', 'invest',
           'Withdrawing $' + bankroll.toFixed(0) + ' - clears a pending purchase needing $' + withdrawThreshold.toFixed(0) + '.');
       }
+      // Remember the pending target so the deposit sweep (step 7) can hold
+      // funds destined for an imminent purchase instead of re-depositing.
+      adapter.__pendingThreshold = withdrawThreshold;
 
       // Risk level: med until clips are flowing well, then high (community
       // guide's timing heuristic - "shifting to High Risk around 100,000
@@ -376,15 +537,55 @@
     // stays true until clipmakerLevel rises - which only buying does.
     // Skipped entirely during a wire shortage (see above) so cheap purchases
     // can't keep funds from ever reaching wireCost.
+    // ROI-ranked purchases (run C1 fix, see RUNS.md): the fixed order
+    // (clipper > megaclipper > marketing) starved marketing, but the real
+    // finding from C1's numbers is that profit per second scales with the
+    // demand constant K = demand*margin (marketing levels, slogan/jingle,
+    // demandBoost), while extra PRODUCTION only nets 0.535*margin - cost
+    // per clip/s (selling more forces the match price down: profit(V) =
+    // V*(K/D(V)-c) with D ~ V^(1/2.15), so marginal profit per unit rate is
+    // margin*(1 - 1/2.15) - c). Rank all three purchases by marginal
+    // profit-per-second per dollar and buy the best payback under a window;
+    // this replaces hand-tuned ordering with the actual economics, and
+    // naturally handles both regimes (early: clippers pay back in seconds;
+    // saturated: marketing is the only thing worth money).
     if (humanFlag === 1 && !wireShortage) {
+      var margin6 = g('margin');
+      var ws6 = g('wireSupply');
+      var cpc6 = ws6 > 0 ? g('wireCost') / ws6 : 0; // wire cost per clip
+      var vol6 = Math.max(g('clipRate') || 0, 1);
+      var marginalClipProfit = Math.max(margin6 * (1 - 1 / SALES_EXPONENT) - cpc6, 0);
+      // Window learned the hard way (run D1, RUNS.md): 600s froze ALL
+      // clipper purchases at t=0 - hand-click volume drags the match-margin
+      // to ~$0.05, making a $6 clipper look like a 900s payback - and the
+      // whole run collapsed (trading at 3,723s vs 1,475s). Early money has
+      // ~zero opportunity cost (the engine pre-upgrades is EV-flat), and
+      // production compounds; the window exists only to stop truly absurd
+      // late-game purchases, so it must be generous. The argmax ordering is
+      // where the actual optimization lives.
+      var PAYBACK_WINDOW_SEC = 3600;
+      var candidates = [];
       if (g('clipmakerLevel') < AUTOCLIPPER_CAP && adapter.isClickable('btnMakeClipper')) {
-        return act(adapter, 'btnMakeClipper', 'economy', 'Buying an AutoClipper (below the 75 cap).');
+        candidates.push(['btnMakeClipper', 'an AutoClipper',
+          (g('clipperBoost') || 1) * marginalClipProfit / Math.max(g('clipperCost'), 0.01)]);
       }
       if (adapter.isClickable('btnMakeMegaClipper')) {
-        return act(adapter, 'btnMakeMegaClipper', 'economy', 'Buying a MegaClipper.');
+        candidates.push(['btnMakeMegaClipper', 'a MegaClipper',
+          (g('megaClipperBoost') || 1) * 500 * marginalClipProfit / Math.max(g('megaClipperCost'), 0.01)]);
       }
       if (adapter.isClickable('btnExpandMarketing')) {
-        return act(adapter, 'btnExpandMarketing', 'economy', 'Expanding marketing (raises demand).');
+        // Each level multiplies the demand constant by 1.1 -> profit lifts
+        // ~10% of current margin on the full sales volume.
+        candidates.push(['btnExpandMarketing', 'marketing',
+          (vol6 * margin6 * 0.1) / Math.max(g('adCost'), 0.01)]);
+      }
+      var best6 = null;
+      for (var b6 = 0; b6 < candidates.length; b6++) {
+        if (best6 === null || candidates[b6][2] > best6[2]) best6 = candidates[b6];
+      }
+      if (best6 && best6[2] * PAYBACK_WINDOW_SEC >= 1) {
+        return act(adapter, best6[0], 'economy',
+          'Buying ' + best6[1] + ' (best ROI: pays back in ' + Math.round(1 / best6[2]) + 's, window ' + PAYBACK_WINDOW_SEC + 's).');
       }
     }
 
@@ -393,7 +594,13 @@
     // investment engine, rather than leaving it idle. Split from the
     // withdraw/risk/upgrade logic in step 5 - see the comment there for why
     // (investDeposit() takes everything in one shot, no partial control).
-    if (humanFlag === 1 && !wireShortage && adapter.isClickable('btnInvest') && g('funds') > 0) {
+    // Hold the sweep when funds are already earmarked for a pending
+    // threshold purchase (set in step 5) - otherwise a fresh withdrawal
+    // would bounce straight back into the engine before the project/economy
+    // click lands next cycle.
+    var pendingThreshold = adapter.__pendingThreshold;
+    var fundsEarmarked = pendingThreshold !== null && pendingThreshold !== undefined && g('funds') >= pendingThreshold * 0.9;
+    if (humanFlag === 1 && !wireShortage && !fundsEarmarked && adapter.isClickable('btnInvest') && g('funds') > 0) {
       return act(adapter, 'btnInvest', 'invest',
         'Depositing $' + g('funds').toFixed(0) + ' into the investment engine (nothing more urgent to spend it on this cycle).');
     }
@@ -447,14 +654,27 @@
     // creativity only accrues while operations>=memory*1000, so this
     // schedule is a concrete guess informed by that research, not yet a
     // from-scratch derivation of our own.
+    // Gate-driven schedule (run C1 fix): the old "6 processors first" start
+    // delayed the 10k-ops Algorithmic Trading gate (needs memory 10) by
+    // several hundred seconds. Order the early points by the actual unlock
+    // gates: memory 10 (trading) -> processors 5 (quantum + a creativity
+    // trickle for New Slogan/Catchy Jingle, the early demand multipliers)
+    // -> memory 12 (Strategic Modeling, 12k ops, the yomi engine) ->
+    // processors 10 (creativity rate) -> then the community guide's
+    // end-of-stage-1 shape (~25 processors, rest memory).
     var PROCESSOR_TARGET = 25;
     if (g('trust') > g('processors') + g('memory')) {
-      var wantProc = g('processors') < 6 || (g('processors') < PROCESSOR_TARGET && g('processors') <= g('memory') / 10);
+      var procNow = g('processors'), memNow = g('memory');
+      var wantProc;
+      if (memNow < 12) wantProc = false; // 10k=trading, 12k=Strategic Modeling (the yomi engine funds everything)
+      else if (procNow < 5) wantProc = true; // quantum gate + creativity trickle
+      else if (procNow < 10) wantProc = true; // creativity rate (New Slogan/Catchy Jingle demand multipliers)
+      else wantProc = procNow < PROCESSOR_TARGET && procNow <= memNow / 3;
       var procId = wantProc ? 'btnAddProc' : 'btnAddMem';
       if (adapter.isClickable(procId)) {
         return act(adapter, procId, 'compute',
           'Allocating spare trust to ' + (wantProc ? 'processors' : 'memory') +
-          ' (target: 6 processors early to unlock quantum computing, ~25 total by end of stage 1, rest memory).');
+          ' (gate schedule: mem10=trading, proc5=quantum, mem12=strategic modeling, proc10=creativity, then ~25/75).');
       }
     }
 
@@ -480,10 +700,16 @@
         if (qChips[qi].active) { qSum += qChips[qi].value; qActiveCount++; }
       }
       var headroom = g('memory') * 1000 - g('standardOps');
-      if (qActiveCount > 0 && qSum >= qActiveCount * 0.6 && headroom > 50) {
+      // In stage 2 the 70k-175k ops project gates (drone flocking chain,
+      // Space Exploration's 120k) sit near or above the memory cap, and
+      // tempOps overflow (a few thousand at saturation, given qComp()'s
+      // damper) is exactly the top-up that closes the gap - so there,
+      // clicking at the cap is the point, not a waste.
+      var wantOverflowPump = humanFlag === 0 && g('spaceFlag') === 0;
+      if (qActiveCount > 0 && qSum >= qActiveCount * 0.6 && (headroom > 50 || wantOverflowPump)) {
         return act(adapter, 'btnQcompute', 'quantum',
           'Clicking quantum compute (signal ' + qSum.toFixed(2) + '/' + qActiveCount +
-          ' active chips, headroom=' + Math.floor(headroom) + ' ops).');
+          ' active chips, ' + (headroom > 50 ? 'headroom=' + Math.floor(headroom) + ' ops' : 'pumping tempOps for stage-2 ops gates') + ').');
       }
     }
 
@@ -566,38 +792,126 @@
         return act(adapter, 'btnMakeFactory', 'stage2', 'Bootstrap: first Factory (the only building that produces clips).');
       }
 
-      // Once bootstrapped: keep power supply ahead of demand (farmRate=50
-      // vs factoryPowerRate=200 per main.js/globals.js - each factory needs
-      // 4x a farm's output), keep harvester/wireDrone levels balanced (both
-      // feed the same wire-production loop), and otherwise prioritize more
-      // factories (the actual clip source) over more farms/batteries.
-      var supply = farmLevel * 50 / 100;
-      var demand = (g('harvesterLevel') * 1 / 100) + (g('wireDroneLevel') * 1 / 100) + (factoryLevel * 200 / 100);
-      var powerRatio = demand > 0 ? supply / demand : Infinity;
-      if (powerRatio < 1.1 && adapter.isClickable('btnMakeFarm')) {
-        return act(adapter, 'btnMakeFarm', 'stage2',
-          'Power supply (' + supply.toFixed(1) + ') close to demand (' + demand.toFixed(1) + ') - adding a Solar Farm.');
-      }
-      if (adapter.isClickable('btnMakeFactory')) {
-        return act(adapter, 'btnMakeFactory', 'stage2', 'Buying a Factory (the primary clip-production driver).');
-      }
-      var harvesterLevel = g('harvesterLevel'), wireDroneLevel = g('wireDroneLevel');
-      var droneOrder = harvesterLevel <= wireDroneLevel
-        ? ['btnMakeHarvester', 'btnMakeWireDrone']
-        : ['btnMakeWireDrone', 'btnMakeHarvester'];
-      for (var b2 = 0; b2 < droneOrder.length; b2++) {
-        if (adapter.isClickable(droneOrder[b2])) {
-          return act(adapter, droneOrder[b2], 'stage2',
-            'Buying ' + (droneOrder[b2] === 'btnMakeHarvester' ? 'a Harvester' : 'a Wire Drone') +
-            ' (keeping harvester/wireDrone levels balanced - both feed the same wire loop).');
+      // -- Swarm gifts: the ONLY source of processors/memory in stage 2
+      // (trust is zeroed by the HypnoDrones event, so step 10's trust-gated
+      // allocation never fires here - a real blocker found by reading
+      // main.js:1171: btnAddProc/btnAddMem are enabled by swarmGifts>0).
+      // Memory first up to 125 (Space Exploration needs operations>=120,000,
+      // and standardOps caps at memory*1000 - qComp's tempOps overflow
+      // saturates at a few thousand, so ~120 memory is genuinely mandatory,
+      // see the damper math in main.js:850-860), then processors (ops regen
+      // + creativity for Entertain the Swarm).
+      if (g('swarmGifts') > 0) {
+        var giftBtn = g('memory') < 125 ? 'btnAddMem' : 'btnAddProc';
+        if (adapter.isClickable(giftBtn)) {
+          return act(adapter, giftBtn, 'stage2',
+            'Spending a swarm gift on ' + (giftBtn === 'btnAddMem' ? 'memory (' + g('memory') + '/125 toward the 120k-ops Space Exploration gate)' : 'a processor') + '.');
         }
       }
-      if (adapter.isClickable('btnMakeFarm')) {
-        return act(adapter, 'btnMakeFarm', 'stage2', 'Buying a Solar Farm (fallback - nothing else affordable).');
+
+      // -- Swarm work/think slider: sliderPos throttles DRONES only
+      // (acquireMatter/processMatter scale by (200-sliderPos)/100;
+      // factories are unaffected) while gift speed scales UP with it
+      // (main.js:2763). The HTML default is 0 = never any gifts, another
+      // hard stage-2 blocker. Rule: while memory is still short, think
+      // whenever the wire buffer is fat (drones idling costs nothing if
+      // factories have minutes of wire queued) and work when it runs low;
+      // once memory target is met, work permanently.
+      var swarmFlag = g('swarmFlag');
+      var fbst = g('factoryBoost') > 1 ? g('factoryBoost') * factoryLevel : 1;
+      var clipsPerSec = g('powMod') * fbst * Math.floor(factoryLevel) * g('factoryRate') * 100; // 100 ticks/sec
+      var wireBufferSec = clipsPerSec > 0 ? g('wire') / clipsPerSec : Infinity;
+      if (swarmFlag === 1) {
+        var desiredSlider = (g('memory') < 125 && wireBufferSec > 240) ? 200
+          : (g('memory') < 125 && wireBufferSec > 60) ? 100 : 0;
+        if (Math.abs((g('sliderPos') || 0) - desiredSlider) > 5) {
+          return actSetValue(adapter, 'slider', desiredSlider, 'stage2',
+            'Swarm slider -> ' + desiredSlider + ' (' + (desiredSlider > 0 ? 'THINK: gifts toward memory ' + g('memory') + '/125, wire buffer ' + Math.round(wireBufferSec) + 's is fat' : 'WORK: full drone output') + ').');
+        }
       }
-      if (adapter.isClickable('btnMakeBattery')) {
-        return act(adapter, 'btnMakeBattery', 'stage2', 'Buying a Battery Tower (fallback - nothing else affordable).');
+
+      // -- Swarm mood events: boredom (no matter left to harvest) blocks all
+      // gifts until Entertained (10k creativity, escalating); disorganization
+      // (drone ratio >1.5) likewise until Synchronized (yomi). Both are
+      // cheap relative to a stalled swarm.
+      if (g('boredomFlag') === 1 && adapter.isClickable('btnEntertainSwarm')) {
+        return act(adapter, 'btnEntertainSwarm', 'stage2', 'Entertaining the bored swarm (gifts were blocked).');
       }
+      if (g('disorgFlag') === 1 && adapter.isClickable('btnSynchSwarm')) {
+        return act(adapter, 'btnSynchSwarm', 'stage2', 'Synchronizing the disorganized swarm (gifts were blocked).');
+      }
+
+      // -- Power: keep supply ahead of demand (farmRate=50 vs
+      // factoryPowerRate=200: 4 farms per factory; drones cost 1 each).
+      // Multi-buy buttons (x10/x100) save click budget at scale.
+      var harvesterLevel = g('harvesterLevel'), wireDroneLevel = g('wireDroneLevel');
+      var supply = farmLevel * 50 / 100;
+      var demand = (harvesterLevel + wireDroneLevel) / 100 + factoryLevel * 2;
+      if (supply < demand * 1.05) {
+        var farmPick = biggestAffordable(adapter, [['btnFarmx100', 100], ['btnFarmx10', 10], ['btnMakeFarm', 1]]);
+        if (farmPick) {
+          return act(adapter, farmPick[0], 'stage2',
+            'Adding ' + farmPick[1] + ' Solar Farm(s): supply ' + supply.toFixed(1) + ' MW < demand ' + demand.toFixed(1) + ' MW.');
+        }
+      }
+
+      // -- Stored power: Space Exploration needs storedPower >= 10,000,000
+      // MW-s on top of the ops/clips costs. Capacity is batteryLevel*10,000,
+      // so >=1,000 batteries, charged by farm SURPLUS - start building the
+      // bank once the factory economy is established (or immediately in
+      // exodus), never before the first few factories exist.
+      var batteryTarget = 1000;
+      var exodus = g('availableMatter') <= 0;
+      if ((exodus || factoryLevel >= 10) && batteryLevel < batteryTarget) {
+        var batPick = biggestAffordable(adapter, [['btnBatteryx100', 100], ['btnBatteryx10', 10], ['btnMakeBattery', 1]]);
+        if (batPick) {
+          return act(adapter, batPick[0], 'stage2',
+            'Adding ' + batPick[1] + ' Battery Tower(s) (' + batteryLevel + '/' + batteryTarget + ' toward the 10M MW-s Space Exploration bank).');
+        }
+        // Charging needs surplus: overbuild farms ~1.3x demand while the bank fills.
+        if (g('storedPower') < 10000000 && supply < demand * 1.3) {
+          var chargePick = biggestAffordable(adapter, [['btnFarmx100', 100], ['btnFarmx10', 10], ['btnMakeFarm', 1]]);
+          if (chargePick) {
+            return act(adapter, chargePick[0], 'stage2',
+              'Adding ' + chargePick[1] + ' Solar Farm(s) surplus to charge the battery bank (' +
+              Math.round(g('storedPower') / 1e6) + '/10M MW-s).');
+          }
+        }
+      }
+
+      // -- Core budget: factories are the only clip producers, so they get
+      // priority whenever the wire buffer is healthy; drones exist to keep
+      // that buffer from draining (harvest matter -> wire). The old
+      // "whichever is affordable" rule starved factories forever: drone
+      // costs scale as (level+1)^2.25*1e6, so there was ALWAYS an affordable
+      // drone eating the budget before unusedClips could reach factoryCost.
+      // exodus (availableMatter==0): harvesters are dead weight; drones stop.
+      if (!exodus && wireBufferSec < 60) {
+        var dronePick = pickDroneBuy(adapter, g, harvesterLevel, wireDroneLevel);
+        if (dronePick) {
+          return act(adapter, dronePick[0], 'stage2',
+            'Buying ' + dronePick[1] + 'x ' + (dronePick[2] ? 'Harvester' : 'Wire Drone') +
+            ' (wire buffer ' + Math.round(wireBufferSec) + 's < 60s target; h=' + harvesterLevel + ' w=' + wireDroneLevel + ').');
+        }
+      }
+      if (adapter.isClickable('btnMakeFactory')) {
+        return act(adapter, 'btnMakeFactory', 'stage2',
+          'Buying a Factory (wire buffer ' + (wireBufferSec === Infinity ? 'inf' : Math.round(wireBufferSec) + 's') + ' - the budget priority).');
+      }
+      // Factory unaffordable and buffer merely "not urgent": top up drones
+      // toward a fatter buffer only while matter remains and the factory
+      // fund wouldn't be set back much (drones cost a fraction of a factory).
+      if (!exodus && wireBufferSec < 300 && g('unusedClips') < g('factoryCost') * 0.5) {
+        var dronePick2 = pickDroneBuy(adapter, g, harvesterLevel, wireDroneLevel);
+        if (dronePick2) {
+          return act(adapter, dronePick2[0], 'stage2',
+            'Topping up drones (buffer ' + Math.round(wireBufferSec) + 's; factory fund far off at ' +
+            Math.round(100 * g('unusedClips') / g('factoryCost')) + '%).');
+        }
+      }
+      return wait('stage2', 'Saving unusedClips for the next Factory (' +
+        Math.round(100 * g('unusedClips') / g('factoryCost')) + '% funded; wire buffer ' +
+        (wireBufferSec === Infinity ? 'inf' : Math.round(wireBufferSec) + 's').toString() + ').');
     }
 
     // 14. Stage 3: launch probes, allocate stat points, buy more probe trust.
@@ -622,6 +936,10 @@
 
   return {
     decide: decide,
+    status: status,
+    MILESTONES: MILESTONES,
+    currentEpoch: currentEpoch,
+    wireStatus: wireStatus,
     bestPickForGrid: bestPickForGrid,
     exactScoresForGrid: exactScoresForGrid,
     STRAT_NAMES: STRAT_NAMES,

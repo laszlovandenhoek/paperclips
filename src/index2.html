@@ -907,16 +907,31 @@
         <div id="botPanel">
             <h3>Autoplay Bot <button id="botPanelToggle"></button></h3>
             <div id="botTimer">
-                <span class="label">Elapsed</span>
+                <span class="label">Game time</span>
                 <span id="botTimerValue">0:00</span>
+                <span class="label" id="botSpeedLabel">speed</span>
+                <select id="botSpeed">
+                    <option value="1" selected>1x</option>
+                    <option value="2">2x</option>
+                    <option value="5">5x</option>
+                    <option value="10">10x</option>
+                    <option value="20">20x</option>
+                </select>
+            </div>
+            <div id="botEpoch">
+                <span class="label">Epoch</span>
+                <span id="botEpochValue">bootstrap</span>
+                <span id="botWireValue"></span>
             </div>
             <div id="botDecision">
                 <span id="botDecisionPhase" class="phase">idle</span>
                 <div id="botDecisionReason" class="reason">Starting up...</div>
             </div>
+            <div id="botMilestones"></div>
             <div id="botLog"></div>
         </div>
 
+        <script type="text/javascript" src="../bot/timewarp.js"></script>
         <script type="text/javascript" src="combat.js"></script>
         <script type="text/javascript" src="globals.js"></script>
         <script type="text/javascript" src="projects.js"></script>
