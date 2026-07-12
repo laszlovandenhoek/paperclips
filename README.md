@@ -10,3 +10,5 @@ This project aims prove the optimal strategy for winning the game. This could be
 
 1. I asked Fable 5: _"see @README.md for the stated purpose of this project. I have a clean mirror of the game's (JS) code in src/. We should first explicitly define the routes to finishing the game, then whittling it down by proving some routes are always longer than others, until we have a manageable set to drill down on."_ Result: `ROUTES.md` outlines the routes, as well as decision axes to consider and some hypotheses on which decisions are likely in the optimal route. Side note: I feel this is a strong start, considering Fable never actually _played_ the game. It got all this just from the source code.
 2. Fable suggested to implement a battle simulator. We had a back-and-forth about what aspects to test and updated `ROUTES.md` accordingly.
+3. Implemented simulation (MR #1).
+4. Improved simulation (MR #2/#3), but not finishing yet.
