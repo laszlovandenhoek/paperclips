@@ -132,6 +132,28 @@ Change: stat plan rebudgeted for the ladder — first 20 trust = speed1/nav1/haz
 rep8/combat5 (combat converts the bleed into honor), fac/harv/wire deferred to the
 30-tier (spawn rates scale with probeCount, so fleet-first multiplies them later).
 
+### J1 — seed 1 — fleet EXTINCT: infra stats are non-negotiable
+
+Deferring fac/harv/wire to the 30-tier meant no space drones ever spawned: 8.2×10³¹
+of explored matter sat unharvestable, the fleet ate the clip pile (1e17/birth) to
+$0 and went extinct (probes 3×10⁻⁴, "Memory release" fired ~14 times). Probes
+aren't just an army — they seed the space economy that feeds their own replication.
+Fix: tier-20 = speed1/nav1/haz4/rep8/fac1/harv1/wire1/combat3.
+
+### J2 → FIRST COMPLETE RUN — seed 1: **13,561s** (WR + 7,899s)
+
+The balanced tier-20 ignited the exponential: probes 1.8e3 → 3×10³⁰, clips
+1.56×10⁵² at t=13,200s, **Universe consumed 13,423s**, dismantle chain + 100 final
+clips + Reject by 13,561s (the endgame tail is only ~140s — the Emperor-of-Drift
+chain is ops-gated, not timer-gated, and the generic project rule chews through it).
+Splits: stage 1 = 7,433s (55% of the run), stage 2 = 3,325s, stage 3 = 2,665s.
+
+Compression plan from here: (1) engine-era austerity — once investLevel ≥ 3 the
+engine compounds ~0.2-0.3%/s vs ~0.01%/s for megaclipper/marketing purchases, so
+stop ALL new production spending and deposit everything (production keeps flowing
+from existing clippers for fib-trust and the 101M-clip token trigger); (2) stage-3
+slider stays at full work until the fleet is self-sustaining (1e6 probes).
+
 ### H2 — seed 1 — backlog converts (clips = full 6.00×10²⁷), new blocker: the pile got spent
 
 Space Exploration stayed unbuyable: diagnostic showed unusedClips at 3.9×10²⁶ —

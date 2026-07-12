@@ -27,6 +27,7 @@ for (const seed of SEEDS) {
     if (sim.resetRequested) break;
   }
   const t = sim.now / 1000;
+  policy.status(adapter); // final milestone recording pass (loop may break between decides)
   const times = adapter.__milestoneTimes || {};
   console.log(`\n=== seed ${seed}: ${finished ? 'FINISHED in ' + t.toFixed(0) + 's' + (t < WR_SECONDS ? ' *** BEATS WR ***' : ` (WR+${(t - WR_SECONDS).toFixed(0)}s)`) : 'not finished by ' + t.toFixed(0) + 's'} ===`);
   for (const m of policy.MILESTONES) {

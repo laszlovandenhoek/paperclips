@@ -92,6 +92,10 @@ if (finished) {
 }
 
 // Milestone split table: actual vs target, the core iteration feedback.
+// One final recording pass first: the loop breaks the instant the finish
+// condition holds, which can be BETWEEN decide() calls - without this the
+// 'credits' milestone shows NOT REACHED on a finished run.
+policy.status(adapter);
 console.log('\nmilestone splits (target vs actual):');
 const times = adapter.__milestoneTimes || {};
 for (const m of policy.MILESTONES) {
