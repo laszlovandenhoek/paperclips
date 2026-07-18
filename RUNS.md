@@ -154,6 +154,39 @@ stop ALL new production spending and deposit everything (production keeps flowin
 from existing clippers for fib-trust and the 101M-clip token trigger); (2) stage-3
 slider stays at full work until the fleet is self-sustaining (1e6 probes).
 
+### L/M/N/O — user-directed model corrections + the noise lesson
+
+Three user-confirmed mechanics encoded: money stays DEPOSITED while saving for a
+milestone (withdraw only at the instant of purchase, no earmarking, deposits
+rate-limited to 1/s since stockShop consumes bankroll on a 1s timer); WireBuyer
+makes all manual wire purchasing obsolete once bought; quantum ops RIDE ABOVE the
+memory cap while positive qOps keep landing (decay only when the flow stops), so
+the headroom gate is gone everywhere — plus a TODO to calculate the optimal
+Photonic Chip count. M added the opportunity-cost hurdle (purchases must beat the
+engine's compounding rate to justify pulling invested money out): Takeover/Monopoly
+collapsed to ~3,100/~4,000s. N exempted production purchases until clips 2.5e8
+(the fib-trust + 101M token gates need raw clip count). O moved pricing above
+quantum (a stale margin costs revenue; a missed peak costs a few ops).
+
+Big methodological lesson: within-config spread across seeds (±3,000s) rivals
+between-config differences — single-seed A/B was overfitting noise. From P on,
+configs are judged on 6-seed medians.
+
+### P — 6-seed baseline of the corrected model (combat-skip bug still latent)
+
+16,321 / 19,919 / 17,915 / 17,793 / 14,204 / 14,679 — median ≈ 17,050s, all finish.
+
+### Stage-3 variance diagnosis (seed 3 deep-log) — the combat-skip trap
+
+The "skip combat while its button doesn't exist" plan logic let later entries fill
+all 20 trust with combat 0: the fleet lost 2.3×10¹⁰ probes in unwinnable battles
+and ground Threnody honor for ~4,500s to reach maxTrust 30 — whereupon (combat 6,
+rep 12) probes went e7 → e33 in minutes and the universe fell in ~1,400s. Stage 3's
+real clock is time-to-honor, and WINNING battles is the honor fountain (Name the
+Battles pays per enemy killed). Fix: combat's trust budget is reserved — the plan
+stalls at 17/20 (rep8/haz4) until the Combat project (150k ops, reachable early
+via gifts + the tempOps ride) unlocks the button. Config Q = P + this fix.
+
 ### H2 — seed 1 — backlog converts (clips = full 6.00×10²⁷), new blocker: the pile got spent
 
 Space Exploration stayed unbuyable: diagnostic showed unusedClips at 3.9×10²⁶ —
@@ -165,3 +198,28 @@ reserve once clips ≥ 5.2×10²⁷. Also: real stage-3 policy written (slider b
 work; gifts → mem 250 then proc; maxTrust at the guide's exact 91,117.99-honor
 constant; probe plan haz2 → rep5 → combat5 → haz3 → fac/harv/wire 1 → rep∞;
 launch clicks last).
+
+### Q → R: the repeatable-token bug — stage 1's dominant loss found
+
+Q (combat-reserve alone): median ≈ 17,242s — no gain; the honor grind still ruled
+stage 3, and stage 1 still stalled. Then the Monopoly→Hypno diagnostic caught it:
+**trust sat at 99 for 2,100s with $28B banked and a $32M bribe pending.** Another
+Token of Goodwill is repeatable but its .flag sets permanently on first purchase —
+the withdraw rule gated on !flag funded exactly ONE token, ever. Every later token
+waited for fib-clip milestones instead. Fix: while trust<100, always consider the
+current bribe. Plus a de-minimis rule: purchases under 1% of the invested balance
+skip the engine hurdle (the hurdle protects a small bankroll; it shouldn't freeze
+the economy after the wealth explosion).
+
+**Config R medians (6 seeds): 14,288/14,328/14,298/14,806/14,736/17,883 →
+median ≈ 14,530s (−2,700 vs Q).** HypnoDrones: 5,725-6,683 (was ~8,300 median).
+Split structure now: stage 1 ≈ 5,800s · stage 2 ≈ 4,800s (regressed - next
+diagnosis target) · stage 3 ≈ 3,600s (honor grind).
+
+### S (in flight): stage-3 honor-rate pivot
+
+From the seed-3 deep log: the 91,118-honor grind ran ~5,100s at ~19 honor/s with
+creativity starved (gifts went to memory-250, a Monument-only target). S: gifts →
+memory only to 150 (Combat's gate) then all processors (creativity IS the Threnody
+cadence); think-slider stays up until the first maxTrust rung; tier-20 ends
+rep8 → combat 4 (wins pay honor, draws don't).
