@@ -234,9 +234,17 @@
     var engineHurdle = purchaseHurdle(g);
     var floorHurdle = 1 / PAYBACK_WINDOW_SEC;
     var clipGatesOpen = g('clips') >= PRODUCTION_CLIP_TARGET;
+    // De minimis rule: once a purchase costs under 1% of the invested
+    // balance, the compounding lost by pulling it out is negligible while
+    // the clip/revenue flow it buys keeps fib-trust and demand moving -
+    // the hurdle exists to protect a SMALL bankroll from being drained,
+    // not to freeze the economy after the wealth explosion (diag, RUNS.md:
+    // marketing/megas sat frozen from t=5,760s with bankroll at 1e10).
+    var bankrollNow = (g('bankroll') || 0) + 0;
     var best = null;
     for (var i = 0; i < cands.length; i++) {
-      var hurdle = (cands[i].production && !clipGatesOpen) ? floorHurdle : engineHurdle;
+      var deMinimis = bankrollNow > 0 && cands[i].cost <= bankrollNow * 0.01;
+      var hurdle = ((cands[i].production && !clipGatesOpen) || deMinimis) ? floorHurdle : engineHurdle;
       if (cands[i].roi < hurdle) continue;
       if (best === null || cands[i].roi > best.roi) best = cands[i];
     }
@@ -544,7 +552,12 @@
       if (project37 && !project37.flag) considerThreshold(1000000);
       else if (project37 && project37.flag && project38 && !project38.flag && g('yomi') >= 3000) considerThreshold(10000000);
       if (project40 && !project40.flag) considerThreshold(500000);
-      if (project40 && project40.flag && project40b && !project40b.flag && g('trust') < 100) considerThreshold(g('bribe'));
+      // Another Token of Goodwill is REPEATABLE: its .flag is set forever
+      // after the first purchase, so gating on !flag funded exactly one
+      // token (diag, RUNS.md: trust sat at 99 for 2,100s with $28B banked
+      // and a $32M bribe pending). While trust < 100, a token is always
+      // the next rung - always consider the current bribe.
+      if (project40 && project40.flag && g('trust') < 100) considerThreshold(g('bribe'));
       // Routine economy purchases only justify pulling invested money out
       // when their return beats the engine's own compounding rate (the
       // opportunity-cost hurdle) - otherwise the money stays in stocks and
@@ -1033,18 +1046,28 @@
       // Full work until the fleet is self-sustaining (~1e6 probes) - the
       // memory gates (Combat 150k, Monument 250k) only matter once battles
       // rage, and throttling the early drone trickle delays fleet ignition.
-      var desiredSlider3 = (g('memory') < 250 && g('probeCount') > 1e6) ? 100 : 0;
+      // Compute-hungry until Combat's 150k gate (memory 150) and then until
+      // the honor ladder's first rung is bought: processors ARE the honor
+      // rate (creativity funds Name the Battles 225k, each Threnody 50k +
+      // 10k escalations - the stage-3 diag measured the 91,118-honor grind
+      // as ~5,100s at starved creativity). After maxTrust rises, full work.
+      var computeHungry3 = g('memory') < 150 || (g('maxTrust') <= 20 && g('processors') < 400);
+      var desiredSlider3 = (computeHungry3 && g('probeCount') > 1e6) ? 100 : 0;
       if (g('swarmFlag') === 1 && Math.abs((g('sliderPos') || 0) - desiredSlider3) > 5) {
         return actSetValue(adapter, 'slider', desiredSlider3, 'stage3',
-          'Swarm slider -> ' + desiredSlider3 + (desiredSlider3 > 0 ? ' (THINK: memory ' + g('memory') + '/250 for Combat 150k / Monument 250k ops)' : ' (WORK: full drone output)') + '.');
+          'Swarm slider -> ' + desiredSlider3 + (desiredSlider3 > 0 ? ' (THINK: mem ' + g('memory') + '/150 + processors ' + g('processors') + ' drive the honor ladder)' : ' (WORK: full drone output)') + '.');
       }
       // Swarm gifts keep arriving once Swarm Computing reconnects
       // (project130); memory raises the ops ceiling for the 100k-200k+
       // late-game projects, processors raise creativity for Threnody.
       if (g('swarmGifts') > 0) {
-        var giftBtn3 = g('memory') < 250 ? 'btnAddMem' : 'btnAddProc';
+        // Memory only to Combat's 150k gate, then everything into
+        // processors: creativity throughput is the honor ladder's rate
+        // limiter (Monument's 250k ops can wait - it's worth 5 Threnodies
+        // and its 5e31-clip requirement arrives late anyway).
+        var giftBtn3 = g('memory') < 150 ? 'btnAddMem' : 'btnAddProc';
         if (adapter.isClickable(giftBtn3)) {
-          return act(adapter, giftBtn3, 'stage3', 'Spending a swarm gift on ' + (giftBtn3 === 'btnAddMem' ? 'memory' : 'a processor') + '.');
+          return act(adapter, giftBtn3, 'stage3', 'Spending a swarm gift on ' + (giftBtn3 === 'btnAddMem' ? 'memory (' + g('memory') + '/150, Combat gate)' : 'a processor (creativity -> Threnody cadence)') + '.');
         }
       }
       // maxTrust +10 per 91,117.99 honor (the guide's honor target is
@@ -1079,6 +1102,15 @@
       // down to nothing and went extinct. Probes are not just an army,
       // they're the only thing that seeds the space economy that feeds
       // their own replication).
+      // Combat's budget is RESERVED, never skipped (stage-3 variance
+      // diagnosis, RUNS.md): the old "skip combat while its button doesn't
+      // exist" let later entries fill all 20 trust with combat 0 - the
+      // fleet then lost 2.3e10 probes in unwinnable battles and spent
+      // 4,500s grinding Threnody honor to maxTrust 30 before it could arm.
+      // Winning battles IS the honor fountain (Name the Battles pays per
+      // enemy killed), so the plan now stalls at rep8/haz4 (17 trust) until
+      // the Combat project (150k ops - reachable early via memory gifts +
+      // the quantum tempOps ride) unlocks the button, then fills 20.
       var PLAN = [
         ['probeHaz', 'btnRaiseProbeHaz', 2],
         ['probeRep', 'btnRaiseProbeRep', 3],
@@ -1089,9 +1121,8 @@
         ['probeFac', 'btnRaiseProbeFac', 1],
         ['probeHarv', 'btnRaiseProbeHarv', 1],
         ['probeWire', 'btnRaiseProbeWire', 1],
-        ['probeCombat', 'btnRaiseProbeCombat', 3],
-        ['probeRep', 'btnRaiseProbeRep', 8],
-        ['probeHaz', 'btnRaiseProbeHaz', 4], // = exactly 20 (4+8+1+1+1+1+1+3)
+        ['probeRep', 'btnRaiseProbeRep', 8], // = 16; plan stalls here until Combat unlocks
+        ['probeCombat', 'btnRaiseProbeCombat', 4], // = exactly 20; wins (not draws) are what pay honor
         ['probeRep', 'btnRaiseProbeRep', 10],
         ['probeHaz', 'btnRaiseProbeHaz', 6],
         ['probeCombat', 'btnRaiseProbeCombat', 5],
@@ -1102,14 +1133,7 @@
       ];
       var nextStat = null;
       for (var p3 = 0; p3 < PLAN.length; p3++) {
-        if ((g(PLAN[p3][0]) || 0) < PLAN[p3][2]) {
-          // Combat's button doesn't exist until its project; skip past it
-          // rather than stalling the whole plan on it.
-          if (PLAN[p3][0] === 'probeCombat' && !adapter.isClickable(PLAN[p3][1]) &&
-              g('probeUsedTrust') < g('probeTrust')) continue;
-          nextStat = PLAN[p3];
-          break;
-        }
+        if ((g(PLAN[p3][0]) || 0) < PLAN[p3][2]) { nextStat = PLAN[p3]; break; }
       }
       if (nextStat && adapter.isClickable(nextStat[1])) {
         return act(adapter, nextStat[1], 'stage3',
