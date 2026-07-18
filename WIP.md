@@ -424,6 +424,14 @@ above for earlier-session gaps still open):
    still explicitly placeholder per the D6/D8/D9/D10 open questions.
 7. Once stage 2 → stage 3 → credits runs end-to-end, measure total elapsed time and
    compare against 5,662s; iterate whichever stage dominates the gap.
+8. **Open calculation (user note): optimal number of Photonic Chips.** qComp ops can
+   be held above the memory cap indefinitely by hammering at 30 clicks/sec (ops only
+   decay back to memory×1000 once the positive qOps flow stops). Chip k costs
+   10,000+5,000×(k−1) ops and adds one sin(qClock×waveSeed_k) term — more chips raise
+   both the per-click ceiling (360/chip in phase) and the above-threshold duty cycle,
+   but even one chip yields ~360×30×duty ops/sec, so later chips may never repay
+   their escalating cost. Calculable from the waveSeed table + the click budget;
+   decide and possibly cap the generic rule's chip purchases.
 
 ## Repo state
 

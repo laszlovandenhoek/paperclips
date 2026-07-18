@@ -191,6 +191,74 @@
     return Math.pow(ratePerSec / SALES_COEFFICIENT, 1 / SALES_EXPONENT);
   }
 
+  // Marginal profit-per-second per dollar for the three routine stage-1
+  // purchases, independent of current affordability - used BOTH to pick
+  // what to buy (step 6) and to decide whether it's worth withdrawing
+  // invested money for it at all (step 5). Production nets 0.535*margin -
+  // wire cost per extra clip/s (selling more forces the match price down);
+  // marketing lifts the demand constant 1.1x, ~10% of margin on the full
+  // sales volume.
+  // Clips themselves are a strategic resource, not just a profit stream:
+  // fib-trust milestones AND the Token of Goodwill trigger (trust>=85 &&
+  // clips>=101,000,000) are gated on the raw clip COUNT. Run M (RUNS.md):
+  // once the engine hurdle rose past production ROI, clip output froze at
+  // early-game levels and stage 1's exit slipped 2,000-5,000s waiting on
+  // the 101M gate. So production purchases (clippers/megaclippers) bypass
+  // the engine hurdle until the clip gates are safely cleared; marketing
+  // never does - it only moves sales, not production.
+  var PRODUCTION_CLIP_TARGET = 2.5e8;
+  function economyCandidates(g) {
+    var margin = g('margin');
+    var ws = g('wireSupply');
+    var cpc = ws > 0 ? g('wireCost') / ws : 0;
+    var vol = Math.max(g('clipRate') || 0, 1);
+    var marginalClipProfit = Math.max(margin * (1 - 1 / SALES_EXPONENT) - cpc, 0);
+    var out = [];
+    if (g('clipmakerLevel') < AUTOCLIPPER_CAP) {
+      var cCost = Math.max(g('clipperCost'), 0.01);
+      out.push({ id: 'btnMakeClipper', label: 'an AutoClipper', cost: cCost, production: true, roi: (g('clipperBoost') || 1) * marginalClipProfit / cCost });
+    }
+    if (g('megaClipperFlag') === 1) {
+      var mCost = Math.max(g('megaClipperCost'), 0.01);
+      out.push({ id: 'btnMakeMegaClipper', label: 'a MegaClipper', cost: mCost, production: true, roi: (g('megaClipperBoost') || 1) * 500 * marginalClipProfit / mCost });
+    }
+    var aCost = Math.max(g('adCost'), 0.01);
+    out.push({ id: 'btnExpandMarketing', label: 'marketing', cost: aCost, production: false, roi: (vol * margin * 0.1) / aCost });
+    return out;
+  }
+  // Best candidate that clears its applicable hurdle, or null. Production
+  // items compare against the payback floor while clips < the gate target;
+  // everything else (and production after the gates) must beat the engine.
+  function bestEconomyCandidate(g) {
+    var cands = economyCandidates(g);
+    var engineHurdle = purchaseHurdle(g);
+    var floorHurdle = 1 / PAYBACK_WINDOW_SEC;
+    var clipGatesOpen = g('clips') >= PRODUCTION_CLIP_TARGET;
+    var best = null;
+    for (var i = 0; i < cands.length; i++) {
+      var hurdle = (cands[i].production && !clipGatesOpen) ? floorHurdle : engineHurdle;
+      if (cands[i].roi < hurdle) continue;
+      if (best === null || cands[i].roi > best.roi) best = cands[i];
+    }
+    return best;
+  }
+
+  // The opportunity-cost hurdle a purchase must beat: money left in the
+  // investment engine compounds (hi-risk stocks move ~12.5% of price per
+  // 2.5s tick, winning with p = stockGainThreshold), so pulling a dollar
+  // out for a purchase only makes sense if the purchase returns more per
+  // second than that dollar would have. Pre-upgrades (threshold 0.5) the
+  // engine is EV-flat and the hurdle falls back to a generous payback
+  // window - early money has no opportunity cost (run D1's lesson).
+  var PAYBACK_WINDOW_SEC = 3600;
+  function purchaseHurdle(g) {
+    var engineRate = 0;
+    if (g('investmentEngineFlag') === 1) {
+      engineRate = Math.max(0, (2 * (g('stockGainThreshold') || 0.5) - 1)) * 0.01;
+    }
+    return Math.max(1 / PAYBACK_WINDOW_SEC, engineRate);
+  }
+
   // Stage-2 build order. Only factories produce clips (clipClick() is only
   // called with factoryLevel*factoryRate, main.js:4281); harvesters/wire
   // drones just convert matter into wire for factories to consume, and
@@ -390,7 +458,12 @@
     // the target the money is better invested than parked in inventory.
     var humanFlag = g('humanFlag');
     var wireNow = wireStatus(g);
-    var wireShortage = humanFlag === 1 && (g('wire') < 100 || wireNow.minutes < WIRE_EMERGENCY_MIN);
+    // Once the WireBuyer exists (and is on - the game defaults it on and we
+    // never toggle it), the game auto-buys the moment wire hits 0: manual
+    // wire clicks are pure waste from then on, and the shortage gate must
+    // not block other spending either.
+    var wireBuyerActive = g('wireBuyerFlag') === 1 && g('wireBuyerStatus') === 1;
+    var wireShortage = humanFlag === 1 && !wireBuyerActive && (g('wire') < 100 || wireNow.minutes < WIRE_EMERGENCY_MIN);
     if (wireShortage && adapter.isClickable('btnBuyWire')) {
       return act(adapter, 'btnBuyWire', 'economy',
         'Restocking wire at any price (' + wireNow.minutes.toFixed(2) + ' min of production left).');
@@ -400,7 +473,7 @@
     // drained every early dollar into wire inventory - a ~15% cost saving -
     // before clippers could compound - a >100%/cycle return. Cheap wire is
     // strictly a surplus-cash optimization).
-    if (humanFlag === 1 && !wireShortage &&
+    if (humanFlag === 1 && !wireShortage && !wireBuyerActive &&
         g('investmentEngineFlag') === 1 &&
         wireNow.delta <= WIRE_CHEAP_DELTA &&
         wireNow.minutes < WIRE_RESERVE_TARGET_MIN &&
@@ -472,16 +545,24 @@
       else if (project37 && project37.flag && project38 && !project38.flag && g('yomi') >= 3000) considerThreshold(10000000);
       if (project40 && !project40.flag) considerThreshold(500000);
       if (project40 && project40.flag && project40b && !project40b.flag && g('trust') < 100) considerThreshold(g('bribe'));
-      if (g('clipmakerLevel') < AUTOCLIPPER_CAP) considerThreshold(g('clipperCost'));
-      considerThreshold(g('megaClipperCost'));
-      considerThreshold(g('adCost'));
+      // Routine economy purchases only justify pulling invested money out
+      // when their return beats the engine's own compounding rate (the
+      // opportunity-cost hurdle) - otherwise the money stays in stocks and
+      // keeps accruing, exactly the user-confirmed model. Run L (RUNS.md):
+      // letting cash float fund sub-hurdle purchases cost ~3,000s of
+      // Monopoly time across every seed.
+      var bestEcon = bestEconomyCandidate(g); // already hurdle-filtered
+      if (bestEcon) considerThreshold(bestEcon.cost);
+      // Withdraw ONLY at the instant the purchase becomes affordable in
+      // total - while saving toward a milestone the money stays deposited,
+      // where stockShop() keeps buying stocks and the balance compounds
+      // (user-confirmed model). The whole-bankroll withdrawal is out of the
+      // market for ~2 decision cycles (purchase next cycle, residue swept
+      // back the cycle after) - negligible versus holding cash for minutes.
       if (withdrawThreshold !== null && bankroll > 0 && fundsNow + bankroll >= withdrawThreshold && fundsNow < withdrawThreshold) {
         return act(adapter, 'btnWithdraw', 'invest',
-          'Withdrawing $' + bankroll.toFixed(0) + ' - clears a pending purchase needing $' + withdrawThreshold.toFixed(0) + '.');
+          'Withdrawing $' + bankroll.toFixed(0) + ' at the moment of purchase (target needs $' + withdrawThreshold.toFixed(0) + ').');
       }
-      // Remember the pending target so the deposit sweep (step 7) can hold
-      // funds destined for an imminent purchase instead of re-depositing.
-      adapter.__pendingThreshold = withdrawThreshold;
 
       // Risk level: med until clips are flowing well, then high (community
       // guide's timing heuristic - "shifting to High Risk around 100,000
@@ -545,51 +626,21 @@
     // this replaces hand-tuned ordering with the actual economics, and
     // naturally handles both regimes (early: clippers pay back in seconds;
     // saturated: marketing is the only thing worth money).
-    // Engine-era austerity (first-full-run analysis, RUNS.md): once the
-    // investment engine has a few threshold upgrades it compounds at
-    // ~0.2-0.3%/s - megaclippers/marketing return ~0.01%/s of their cost.
-    // Every dollar diverted from deposits then DELAYS Takeover/Monopoly/
-    // tokens, the actual stage-1 exit chain. Production keeps running on
-    // existing clippers (fib-trust needs clips flowing, and the 101M-clip
-    // token trigger), so only NEW purchases stop.
-    var engineDominates = humanFlag === 1 && g('investLevel') >= 3 && g('investmentEngineFlag') === 1;
-    if (humanFlag === 1 && !wireShortage && !engineDominates) {
-      var margin6 = g('margin');
-      var ws6 = g('wireSupply');
-      var cpc6 = ws6 > 0 ? g('wireCost') / ws6 : 0; // wire cost per clip
-      var vol6 = Math.max(g('clipRate') || 0, 1);
-      var marginalClipProfit = Math.max(margin6 * (1 - 1 / SALES_EXPONENT) - cpc6, 0);
-      // Window learned the hard way (run D1, RUNS.md): 600s froze ALL
-      // clipper purchases at t=0 - hand-click volume drags the match-margin
-      // to ~$0.05, making a $6 clipper look like a 900s payback - and the
-      // whole run collapsed (trading at 3,723s vs 1,475s). Early money has
-      // ~zero opportunity cost (the engine pre-upgrades is EV-flat), and
-      // production compounds; the window exists only to stop truly absurd
-      // late-game purchases, so it must be generous. The argmax ordering is
-      // where the actual optimization lives.
-      var PAYBACK_WINDOW_SEC = 3600;
-      var candidates = [];
-      if (g('clipmakerLevel') < AUTOCLIPPER_CAP && adapter.isClickable('btnMakeClipper')) {
-        candidates.push(['btnMakeClipper', 'an AutoClipper',
-          (g('clipperBoost') || 1) * marginalClipProfit / Math.max(g('clipperCost'), 0.01)]);
-      }
-      if (adapter.isClickable('btnMakeMegaClipper')) {
-        candidates.push(['btnMakeMegaClipper', 'a MegaClipper',
-          (g('megaClipperBoost') || 1) * 500 * marginalClipProfit / Math.max(g('megaClipperCost'), 0.01)]);
-      }
-      if (adapter.isClickable('btnExpandMarketing')) {
-        // Each level multiplies the demand constant by 1.1 -> profit lifts
-        // ~10% of current margin on the full sales volume.
-        candidates.push(['btnExpandMarketing', 'marketing',
-          (vol6 * margin6 * 0.1) / Math.max(g('adCost'), 0.01)]);
-      }
-      var best6 = null;
-      for (var b6 = 0; b6 < candidates.length; b6++) {
-        if (best6 === null || candidates[b6][2] > best6[2]) best6 = candidates[b6];
-      }
-      if (best6 && best6[2] * PAYBACK_WINDOW_SEC >= 1) {
-        return act(adapter, best6[0], 'economy',
-          'Buying ' + best6[1] + ' (best ROI: pays back in ' + Math.round(1 / best6[2]) + 's, window ' + PAYBACK_WINDOW_SEC + 's).');
+    // (An "engine-era austerity" experiment - stop ALL production purchases
+    // once the engine compounds - regressed seed 1 from a 13,561s finish to
+    // a DNF: production still feeds fib-trust and the 101M-clip token
+    // trigger. Reverted; the cycle ordering below already gives purchases
+    // first claim on cash flow and the engine gets the residue.)
+    // Buy the best candidate only when it beats the opportunity-cost hurdle
+    // (see purchaseHurdle: the engine's compounding rate once upgraded, a
+    // generous payback window before). Same math step 5 used to decide the
+    // withdrawal, so the two never disagree about what money is for.
+    if (humanFlag === 1 && !wireShortage) {
+      var best6 = bestEconomyCandidate(g); // already hurdle-filtered (production bypasses the engine hurdle pre-clip-gates)
+      if (best6 && adapter.isClickable(best6.id)) {
+        return act(adapter, best6.id, 'economy',
+          'Buying ' + best6.label + ' (ROI ' + (best6.roi * 100).toFixed(4) + '%/s' +
+          (best6.production && g('clips') < PRODUCTION_CLIP_TARGET ? '; production exempt from engine hurdle until clips 2.5e8' : '') + ').');
       }
     }
 
@@ -598,13 +649,17 @@
     // investment engine, rather than leaving it idle. Split from the
     // withdraw/risk/upgrade logic in step 5 - see the comment there for why
     // (investDeposit() takes everything in one shot, no partial control).
-    // Hold the sweep when funds are already earmarked for a pending
-    // threshold purchase (set in step 5) - otherwise a fresh withdrawal
-    // would bounce straight back into the engine before the project/economy
-    // click lands next cycle.
-    var pendingThreshold = adapter.__pendingThreshold;
-    var fundsEarmarked = pendingThreshold !== null && pendingThreshold !== undefined && g('funds') >= pendingThreshold * 0.9;
-    if (humanFlag === 1 && !wireShortage && !fundsEarmarked && adapter.isClickable('btnInvest') && g('funds') > 0) {
+    // Always sweep residue - cash out of the market earns nothing. There's
+    // no earmarking: if a withdrawal's purchase left change behind, it goes
+    // straight back in (the purchase itself already happened in the steps
+    // above this one, which get first claim on funds every cycle).
+    // Rate-limited to 1/sec: stockShop() only converts bankroll to stocks
+    // on a 1,000ms timer (main.js:1666), so faster sweeping adds zero
+    // compounding while eating the 30 clicks/sec budget that quantum
+    // hammering (step 11) now puts to work.
+    if (humanFlag === 1 && !wireShortage && adapter.isClickable('btnInvest') && g('funds') > 0 &&
+        (adapter.__lastDepositAt === undefined || adapter.now() - adapter.__lastDepositAt >= 1000)) {
+      adapter.__lastDepositAt = adapter.now();
       return act(adapter, 'btnInvest', 'invest',
         'Depositing $' + g('funds').toFixed(0) + ' into the investment engine (nothing more urgent to spend it on this cycle).');
     }
@@ -682,42 +737,12 @@
       }
     }
 
-    // 11. Quantum computing: bonus ops from clicking qComp() at good times
-    // (main.js:829-864). Each active photonic chip contributes
-    // sin(qClock*waveSeed) - different waveSeeds per chip mean they drift
-    // in and out of phase with each other, no simple shared period. Chips
-    // themselves are bought automatically by the generic project rule
-    // (project51, repeatable, ops-only cost) - the only thing needed here
-    // is clicking at decent moments. No cost to click (never gated by
-    // affordability, only visibility), so click whenever the aggregate
-    // signal is reasonably close to its per-chip max (some chips will
-    // always lag out of phase - a threshold heuristic, not exact
-    // peak-finding) and there's ops headroom to actually bank the gain
-    // (excess beyond the memory cap decays as tempOps instead of banking
-    // permanently, main.js:3419-3432, so clicking when already at the cap
-    // is mostly wasted). Stays relevant through stage 3 (only hidden at
-    // dismantle>=5, deep in the endgame), not just stage 1.
-    if (g('qFlag') === 1 && adapter.isClickable('btnQcompute')) {
-      var qChips = g('qChips') || [];
-      var qSum = 0, qActiveCount = 0;
-      for (var qi = 0; qi < qChips.length; qi++) {
-        if (qChips[qi].active) { qSum += qChips[qi].value; qActiveCount++; }
-      }
-      var headroom = g('memory') * 1000 - g('standardOps');
-      // In stage 2 the 70k-175k ops project gates (drone flocking chain,
-      // Space Exploration's 120k) sit near or above the memory cap, and
-      // tempOps overflow (a few thousand at saturation, given qComp()'s
-      // damper) is exactly the top-up that closes the gap - so there,
-      // clicking at the cap is the point, not a waste.
-      var wantOverflowPump = humanFlag === 0; // stages 2 AND 3 both have ops gates near/above the memory cap
-      if (qActiveCount > 0 && qSum >= qActiveCount * 0.6 && (headroom > 50 || wantOverflowPump)) {
-        return act(adapter, 'btnQcompute', 'quantum',
-          'Clicking quantum compute (signal ' + qSum.toFixed(2) + '/' + qActiveCount +
-          ' active chips, ' + (headroom > 50 ? 'headroom=' + Math.floor(headroom) + ' ops' : 'pumping tempOps for stage-2 ops gates') + ').');
-      }
-    }
-
-    // 12. Price matching: set margin so expected sales volume tracks
+    // 11. Price matching (moved ABOVE quantum, run N fix - see RUNS.md:
+    // no-headroom hammering occupies ~35% of decision cycles, and with
+    // pricing below it the margin lagged the post-Monopoly demand curve
+    // for seconds at a time; a stale price costs real revenue, an
+    // un-clicked quantum peak costs only a few ops - quantum is strictly
+    // a spare-cycles activity): set margin so expected sales volume tracks
     // production (clipRate), while enforcing a profit floor above the live
     // marginal cost per clip (every clip - hand, autoclipper, or
     // megaclipper - consumes exactly 1 wire inch, `clipClick()`, so cost per
@@ -761,6 +786,52 @@
           'Lowering price ($' + currentMargin.toFixed(2) + ' -> target $' + desiredMargin.toFixed(2) +
           ') to grow sales toward production rate (clipRate=' + g('clipRate').toFixed(1) + '/s), staying above ' +
           'cost-per-clip $' + costPerClip.toFixed(4) + '.');
+      }
+    }
+
+    // 12. Quantum computing: bonus ops from clicking qComp() at good times
+    // (main.js:829-864). Each active photonic chip contributes
+    // sin(qClock*waveSeed) - different waveSeeds per chip mean they drift
+    // in and out of phase with each other, no simple shared period. Chips
+    // themselves are bought automatically by the generic project rule
+    // (project51, repeatable, ops-only cost) - the only thing needed here
+    // is clicking at decent moments. No cost to click (never gated by
+    // affordability, only visibility), so click whenever the aggregate
+    // signal is reasonably close to its per-chip max (some chips will
+    // always lag out of phase - a threshold heuristic, not exact
+    // peak-finding) and there's ops headroom to actually bank the gain
+    // (excess beyond the memory cap decays as tempOps instead of banking
+    // permanently, main.js:3419-3432, so clicking when already at the cap
+    // is mostly wasted). Stays relevant through stage 3 (only hidden at
+    // dismantle>=5, deep in the endgame), not just stage 1.
+    if (g('qFlag') === 1 && adapter.isClickable('btnQcompute')) {
+      var qChips = g('qChips') || [];
+      var qSum = 0, qActiveCount = 0;
+      for (var qi = 0; qi < qChips.length; qi++) {
+        if (qChips[qi].active) { qSum += qChips[qi].value; qActiveCount++; }
+      }
+      // No headroom gate at all (user-confirmed mechanic): while qOps keep
+      // landing, ops keep RISING above the memory maximum - the fall back
+      // toward memory*1000 only starts once the positive flow stops. So at
+      // 30 clicks/sec, sustained hammering holds ops well above the cap
+      // permanently, which feeds every ops-gated project in every stage.
+      // The only guard is the sign of the signal: qq = ceil(qSum*360) is
+      // SUBTRACTED when the wave sum is negative, so click only in the
+      // clearly-positive part of the aggregate phase.
+      //
+      // TODO(user note): derive the optimal number of Photonic Chips.
+      // Each chip k costs 10,000+5,000*(k-1) ops (project51) and adds one
+      // sin(qClock*waveSeed_k) term: more chips raise the achievable
+      // qq-per-click ceiling (360 per fully-in-phase chip) AND the fraction
+      // of time the aggregate sits above any threshold - but with 30
+      // clicks/sec even one chip yields ~360*30*(duty cycle) ops/sec, so
+      // the marginal chip may not repay its escalating ops cost. This is
+      // calculable from the waveSeed table + click budget; do the math and
+      // possibly cap the generic project rule's chip purchases.
+      if (qActiveCount > 0 && qSum >= qActiveCount * 0.6) {
+        return act(adapter, 'btnQcompute', 'quantum',
+          'Clicking quantum compute (signal ' + qSum.toFixed(2) + '/' + qActiveCount +
+          ' active chips; ops ride above the memory cap while the flow stays positive).');
       }
     }
 
