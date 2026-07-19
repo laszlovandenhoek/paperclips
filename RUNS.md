@@ -244,3 +244,10 @@ accident: bank processors in STAGE 2 (gift target 200, was 40) where think-windo
 are cheap; stage-3 gifts mem→150 then all-proc. Buildout pays ~900s, stage 3 drops
 from ~4,850s to ~3,400s. Split structure: stage 1 ≈ 5,940 (43%) · buildout ≈ 3,480 ·
 exodus ≈ 640 · stage 3 ≈ 3,430 · endgame ≈ 100.
+
+### Y2/Y3 — banking-knob sweep: 200 is the sweet spot
+
+Stage-2 processor gift target 120 → median ~13,953 (buildout faster, stage 3 gives
+it back). 300 → median ~14,981 (think-drag swamps the harvest). 200 (config Y)
+stands: **champion median ≈ 13,724s**, 2.42x WR. Next fronts by size: stage 1
+≈ 5,940s · buildout ≈ 3,480s · stage 3 ≈ 3,430s.
