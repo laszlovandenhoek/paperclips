@@ -251,3 +251,9 @@ Stage-2 processor gift target 120 → median ~13,953 (buildout faster, stage 3 g
 it back). 300 → median ~14,981 (think-drag swamps the harvest). 200 (config Y)
 stands: **champion median ≈ 13,724s**, 2.42x WR. Next fronts by size: stage 1
 ≈ 5,940s · buildout ≈ 3,480s · stage 3 ≈ 3,430s.
+
+### Z1 — proc-2 opener: refuted
+
+Trading went 1,475 → 2,133s and the whole run cascaded +1,900s: the first six
+processors are the ops regen the entire early ops-gated tech tree runs on, not a
+luxury. Reverted; Y stands (median ≈ 13,724s).
