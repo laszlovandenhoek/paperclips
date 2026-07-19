@@ -745,6 +745,9 @@
       // flywheel, waiting on 20k creativity ~1,900s into stage 2. Same
       // 25/75 end-state at trust 100, processors just arrive much earlier
       // in the trust curve).
+      // proc-6-first opener (a proc-2-first experiment, run Z1, regressed
+      // trading 1,475 -> 2,133s: those first processors ARE the ops regen
+      // the whole early ops-gated tech tree runs on), then mem/3 pacing.
       var procNow = g('processors'), memNow = g('memory');
       var wantProc = procNow < 6 || (procNow < PROCESSOR_TARGET && procNow <= memNow / 3);
       var procId = wantProc ? 'btnAddProc' : 'btnAddMem';
