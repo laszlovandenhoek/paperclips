@@ -740,8 +740,13 @@
       // heavy left the run on 1 processor until t=6,300s - no ops regen, no
       // creativity, every project gated. The original proc-6-first shape
       // (best observed trading split, 1,475s in C1) restored.
+      // mem/3 pacing (was mem/10, which pinned stage 1 at 9 processors and
+      // starved creativity - the stage-2 diag showed Momentum, the powMod
+      // flywheel, waiting on 20k creativity ~1,900s into stage 2. Same
+      // 25/75 end-state at trust 100, processors just arrive much earlier
+      // in the trust curve).
       var procNow = g('processors'), memNow = g('memory');
-      var wantProc = procNow < 6 || (procNow < PROCESSOR_TARGET && procNow <= memNow / 10);
+      var wantProc = procNow < 6 || (procNow < PROCESSOR_TARGET && procNow <= memNow / 3);
       var procId = wantProc ? 'btnAddProc' : 'btnAddMem';
       if (adapter.isClickable(procId)) {
         return act(adapter, procId, 'compute',
@@ -902,7 +907,12 @@
             'Spending a swarm gift on ' + (giftBtn === 'btnAddMem' ? 'memory (' + g('memory') + '/125 toward the 120k-ops Space Exploration gate)' : 'a processor (creativity for Momentum/Entertain)') + '.');
         }
       }
-      var computeHungry = g('memory') < 125 || g('processors') < 40;
+      // Processor target 200 (was 40): stage-3's honor ladder burns
+      // creativity at a fixed total cost, and run-U-vs-V comparison showed
+      // arriving in stage 3 processor-poor loses more time at the ladder
+      // than a fast exodus saves - so the banking happens HERE, where
+      // buildout/exodus think-windows are cheap.
+      var computeHungry = g('memory') < 125 || g('processors') < 200;
       var exodus = g('availableMatter') <= 0; // Earth harvested clean - but see workDone below
       // Run H1 (RUNS.md): "exodus -> think full-time" froze the run 0.3e27
       // clips short of Space Exploration's 5e27 - wire DRONES still had
@@ -956,6 +966,18 @@
           return act(adapter, farmPick[0], 'stage2',
             'Adding ' + farmPick[1] + ' Solar Farm(s): supply ' + supply.toFixed(1) + ' MW < demand ' + demand.toFixed(1) + ' MW.');
         }
+        // Power-short and can't afford a farm: HOLD the money - but ONLY
+        // once the harvest economy actually runs. powMod scales production
+        // AND harvest, so leaking farm money to drones deepens the brownout
+        // (a 1,700s crawl at powMod 0.7 in one diag) - but holding with NO
+        // drones is a deadlock triangle: no drones -> no wire -> factory
+        // idle -> clips frozen -> farm never affordable (run T bricked all
+        // six seeds exactly this way; the income to save comes from the
+        // very chain the hold was blocking).
+        if (harvesterLevel + wireDroneLevel >= 100) {
+          return wait('stage2', 'Power-short (supply ' + supply.toFixed(1) + ' < demand ' + demand.toFixed(1) +
+            ' MW) - holding unusedClips for the next farm.');
+        }
       }
 
       // -- Stored power: Space Exploration needs storedPower >= 10,000,000
@@ -970,14 +992,22 @@
           return act(adapter, batPick[0], 'stage2',
             'Adding ' + batPick[1] + ' Battery Tower(s) (' + batteryLevel + '/' + batteryTarget + ' toward the 10M MW-s Space Exploration bank).');
         }
-        // Charging needs surplus: overbuild farms ~1.3x demand while the bank fills.
-        if (g('storedPower') < 10000000 && supply < demand * 1.3) {
-          var chargePick = biggestAffordable(adapter, [['btnFarmx100', 100], ['btnFarmx10', 10], ['btnMakeFarm', 1]]);
-          if (chargePick) {
-            return act(adapter, chargePick[0], 'stage2',
-              'Adding ' + chargePick[1] + ' Solar Farm(s) surplus to charge the battery bank (' +
-              Math.round(g('storedPower') / 1e6) + '/10M MW-s).');
-          }
+      }
+      // Charging: storedPower fills at (supply - demand) per tick, so a
+      // ~40-unit surplus needs ~2,600s to bank the 10M MW-s Space
+      // Exploration wants - and run U showed the exodus STILL a 2,400s
+      // charging wait because this spree was nested under batteryLevel <
+      // target: the moment the bank finished BUILDING, the surplus buying
+      // stopped and charging crawled. It stands alone now: once the clip
+      // pile dwarfs farm costs (1e21 vs ~1e17 per x100 batch), buy surplus
+      // until +1,000 units/tick, which fills the bank in ~100s.
+      if ((exodus || factoryLevel >= 10) && g('storedPower') < 10000000 &&
+          (supply - demand) < 1000 && g('unusedClips') > 1e21) {
+        var chargePick = biggestAffordable(adapter, [['btnFarmx100', 100], ['btnFarmx10', 10], ['btnMakeFarm', 1]]);
+        if (chargePick) {
+          return act(adapter, chargePick[0], 'stage2',
+            'Farm surplus spree: +' + chargePick[1] + ' (surplus ' + Math.round(supply - demand) +
+            '/1000 MW; bank ' + Math.round(g('storedPower') / 1e6) + '/10M MW-s).');
         }
       }
 
@@ -1051,7 +1081,7 @@
       // rate (creativity funds Name the Battles 225k, each Threnody 50k +
       // 10k escalations - the stage-3 diag measured the 91,118-honor grind
       // as ~5,100s at starved creativity). After maxTrust rises, full work.
-      var computeHungry3 = g('memory') < 150 || (g('maxTrust') <= 20 && g('processors') < 400);
+      var computeHungry3 = g('maxTrust') <= 20 && g('processors') < 600;
       var desiredSlider3 = (computeHungry3 && g('probeCount') > 1e6) ? 100 : 0;
       if (g('swarmFlag') === 1 && Math.abs((g('sliderPos') || 0) - desiredSlider3) > 5) {
         return actSetValue(adapter, 'slider', desiredSlider3, 'stage3',
@@ -1061,10 +1091,14 @@
       // (project130); memory raises the ops ceiling for the 100k-200k+
       // late-game projects, processors raise creativity for Threnody.
       if (g('swarmGifts') > 0) {
-        // Memory only to Combat's 150k gate, then everything into
-        // processors: creativity throughput is the honor ladder's rate
-        // limiter (Monument's 250k ops can wait - it's worth 5 Threnodies
-        // and its 5e31-clip requirement arrives late anyway).
+        // Gift order: memory to 150 (Combat's 150k gate is REAL - the
+        // tempOps ride saturates at a few thousand and run W proved the
+        // shortcut fatal, all six seeds DNF with Threnody's trigger
+        // (probeUsedTrust==maxTrust) blocked behind the unarmed 17/20
+        // stall), then everything into processors: creativity throughput
+        // is the honor ladder's rate limiter. (A Monument detour - mem to
+        // 250 for its one-shot +50k honor - tested WORSE, run X: the gift
+        // bandwidth it diverted cost more than the honor it bought.)
         var giftBtn3 = g('memory') < 150 ? 'btnAddMem' : 'btnAddProc';
         if (adapter.isClickable(giftBtn3)) {
           return act(adapter, giftBtn3, 'stage3', 'Spending a swarm gift on ' + (giftBtn3 === 'btnAddMem' ? 'memory (' + g('memory') + '/150, Combat gate)' : 'a processor (creativity -> Threnody cadence)') + '.');

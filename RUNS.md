@@ -223,3 +223,24 @@ creativity starved (gifts went to memory-250, a Monument-only target). S: gifts 
 memory only to 150 (Combat's gate) then all processors (creativity IS the Threnody
 cadence); think-slider stays up until the first maxTrust rung; tier-20 ends
 rep8 → combat 4 (wins pay honor, draws don't).
+
+### T → Y: power discipline, the charging spree, and compute banking
+
+T: power-first hold deadlocked ALL six seeds (no drones → no wire → factory idle →
+clips frozen → farm never affordable — the income the hold was saving comes from the
+chain it blocked). Fixed: hold only once the drone economy runs (≥100 drones).
+U (median 14,166): exodus still a 2,400s charging wait — the farm-surplus spree was
+nested under batteryLevel<1000 and died the moment the bank finished BUILDING.
+V (un-nested; median ~14,590): exodus fell to ~1,100s but stage 3 absorbed the whole
+gain — the old exodus wait had been double-duty as the compute farm, and arriving
+processor-poor made the honor grind longer. W (all-proc gifts in stage 3): fatal —
+Combat's 150k gate is real (the tempOps ride saturates at a few thousand), and the
+unarmed 17/20 stall also blocks Threnody's trigger (probeUsedTrust==maxTrust): six
+DNFs, zero honor forever. X (Monument detour, mem 250): regressed ~600s — the gift
+bandwidth cost more than the +50k honor bought.
+
+**Y — new best: median ≈ 13,724s (13,562-14,043).** The principled version of U's
+accident: bank processors in STAGE 2 (gift target 200, was 40) where think-windows
+are cheap; stage-3 gifts mem→150 then all-proc. Buildout pays ~900s, stage 3 drops
+from ~4,850s to ~3,400s. Split structure: stage 1 ≈ 5,940 (43%) · buildout ≈ 3,480 ·
+exodus ≈ 640 · stage 3 ≈ 3,430 · endgame ≈ 100.
