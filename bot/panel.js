@@ -143,7 +143,31 @@
     milestonesEl.innerHTML = html;
   }
 
+  // The run is over the moment the last 100 clips are hand-made after
+  // Reject - the same condition the headless runner stops on. Freeze the
+  // clock there (it used to keep counting forever, making the panel's
+  // headline number meaningless as a result) and stop the bot.
+  var finishedAtMs = null;
+  function isFinished() {
+    try {
+      return adapter.get('dismantle') >= 4 && adapter.get('finalClips') >= 100;
+    } catch (e) { return false; }
+  }
+
   function step() {
+    if (finishedAtMs === null && isFinished()) {
+      finishedAtMs = adapter.now();
+      running = false;
+      updateToggleButton();
+      decisionPhaseEl.textContent = 'done';
+      decisionReasonEl.textContent = 'Run complete in ' + formatElapsed(finishedAtMs - startGameMs) +
+        ' of game time. World record is 1:34:22.';
+    }
+    if (finishedAtMs !== null) {
+      timerEl.textContent = formatElapsed(finishedAtMs - startGameMs) + ' FINAL';
+      return;
+    }
+
     timerEl.textContent = formatElapsed(adapter.now() - startGameMs) +
       (timeWarp && timeWarp.getSpeed() !== 1 ? ' (' + timeWarp.getSpeed() + 'x)' : '');
 
