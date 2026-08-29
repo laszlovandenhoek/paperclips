@@ -257,3 +257,40 @@ stands: **champion median ≈ 13,724s**, 2.42x WR. Next fronts by size: stage 1
 Trading went 1,475 → 2,133s and the whole run cascaded +1,900s: the first six
 processors are the ops regen the entire early ops-gated tech tree runs on, not a
 luxury. Reverted; Y stands (median ≈ 13,724s).
+
+### AA–AD — browser-observed bug fixes (user report): new best ≈ 13,250s
+
+Five real bugs, all visible in the web version, plus tooling:
+
+1. **Premature bribe/token withdrawals.** `considerThreshold` tested `project40 &&
+   !flag` — but every `projectNN` object exists as a global from load, so the bot
+   pulled $500k out of the market at t=0 for a token gated behind `trust>=85 &&
+   clips>=101,000,000`, and re-pulled for each bribe before its button existed.
+   Now gated on membership in `activeProjects` (main.js:873 pushes only once
+   `trigger()` holds) — the money keeps compounding until it can actually be spent.
+2. **Fast-forward didn't cover tournaments.** The round loop is a `setTimeout`
+   chain (main.js:2283/2299); timewarp only virtualized `setInterval`, so yomi
+   income ran at 1x while everything else was sped up. `setTimeout`/`clearTimeout`
+   are now virtualized too (one-shot timers).
+3. **Drone ratio was 1:1.** Derived from the rate formulas: harvest ∝ dbsth·H·
+   harvesterRate, processing ∝ dbstw·W·wireDroneRate, both quadratic once Drone
+   Flocking sets droneBoost=2. Balancing gives **W/H = √(26180337/16180339) =
+   √φ ≈ 1.272** post-flocking, φ ≈ 1.618 pre — but φ exceeds the 1.5
+   disorganization threshold (main.js:2683-2700), so pre-flocking targets 1.45.
+   (The game's two rate constants are literally φ and 1/φ scaled.) Worth ~520s.
+4. **Slider hit 200 = zero work** (`(200-sliderPos)/100`), which stops harvesting
+   dead — the same shape as the H1 exodus deadlock. Capped at 198 (~1% work).
+5. **Battery towers stalled while the bank sat full.** Buying was gated on
+   `factoryLevel>=10 || exodus`; `updatePower()` discards surplus once storedPower
+   hits capacity, so a full bank below the 10M requirement burned the charge
+   window. Added a full-bank override.
+
+Also: quantum clicking now requires a *stretch goal* (ops below resting value, or
+an unaffordable active project whose parsed ops price exceeds current ops) instead
+of hammering unconditionally — it was ~35% of the click budget with nothing to buy.
+A "flocking chase" (buying drones toward the 50k droneBoost threshold on surplus)
+was tried and **reverted**: median 14,143s vs 13,203s without it.
+
+**6-seed medians: 13,060 / 13,105 / 13,220 / 13,279 / 13,305 / 13,386 → ≈ 13,250s**
+(2.34x WR, previous best 13,724s). Splits (seed 1): stage 1 5,873 · buildout 2,753 ·
+exodus 399 · stage 3 4,088 · endgame 107.

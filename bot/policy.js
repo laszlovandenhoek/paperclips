@@ -373,24 +373,44 @@
     return null;
   }
 
-  // Buy whichever drone type is behind, biggest affordable batch. Keeping
-  // the two levels close matters beyond production balance: droneRatio
-  // (max+1)/(min+1) > 1.5 accrues disorganization (main.js:2683-2700) which
-  // eventually stalls all swarm gifts. A transiently large batch on the
-  // lower side is fine (the counter moves at most 0.01/tick and decays as
-  // soon as the other side's batch lands a cycle later); just don't let a
-  // batch overshoot to 3x the other side.
+  // Optimal wire-drone : harvester ratio, derived from the rate formulas
+  // rather than assumed 1:1 (which starves processing and grows an
+  // acquiredMatter backlog).
+  //   acquireMatter: mtr = powMod * dbsth * H * harvesterRate  (main.js:4105)
+  //   processMatter: a   = powMod * dbstw * W * wireDroneRate  (main.js:4140)
+  // with dbsth = droneBoost*H, dbstw = droneBoost*W once Drone Flocking
+  // (project112, droneBoost=2) lands - i.e. BOTH sides are quadratic then,
+  // linear before. Setting harvest == processing:
+  //   post-flocking: W/H = sqrt(harvesterRate/wireDroneRate)
+  //                      = sqrt(26180337/16180339) = sqrt(phi) ~ 1.272
+  //   pre-flocking:  W/H = harvesterRate/wireDroneRate = phi ~ 1.618
+  // (the game's rate constants are literally phi and 1/phi scaled.) But
+  // droneRatio = (max+1)/(min+1) > 1.5 accrues disorganization
+  // (main.js:2683-2700) which eventually freezes all swarm gifts, so the
+  // pre-flocking target is capped just under that limit.
+  var DRONE_RATIO_POST_FLOCKING = Math.sqrt(26180337 / 16180339); // ~1.272
+  var DRONE_RATIO_PRE_FLOCKING = 1.45; // phi (1.618) would disorganize the swarm
+  var DRONE_DISORG_LIMIT = 1.48;
+  function targetWirePerHarvester(g) {
+    return (g('droneBoost') || 1) > 1 ? DRONE_RATIO_POST_FLOCKING : DRONE_RATIO_PRE_FLOCKING;
+  }
+  // Buy whichever side is behind the target ratio, in the biggest batch
+  // that doesn't push the swarm past the disorganization limit.
   function pickDroneBuy(adapter, g, harvesterLevel, wireDroneLevel) {
-    var harvBehind = harvesterLevel <= wireDroneLevel;
-    var lowLevel = harvBehind ? harvesterLevel : wireDroneLevel;
-    var highLevel = harvBehind ? wireDroneLevel : harvesterLevel;
-    var buttons = harvBehind
-      ? [['btnHarvesterx1000', 1000], ['btnHarvesterx100', 100], ['btnHarvesterx10', 10], ['btnMakeHarvester', 1]]
-      : [['btnWireDronex1000', 1000], ['btnWireDronex100', 100], ['btnWireDronex10', 10], ['btnMakeWireDrone', 1]];
+    var target = targetWirePerHarvester(g);
+    var buyWire = (wireDroneLevel + 1) < (harvesterLevel + 1) * target;
+    var buttons = buyWire
+      ? [['btnWireDronex1000', 1000], ['btnWireDronex100', 100], ['btnWireDronex10', 10], ['btnMakeWireDrone', 1]]
+      : [['btnHarvesterx1000', 1000], ['btnHarvesterx100', 100], ['btnHarvesterx10', 10], ['btnMakeHarvester', 1]];
     for (var i = 0; i < buttons.length; i++) {
       var count = buttons[i][1];
-      if (count > 1 && (lowLevel + count + 1) > (highLevel + 1) * 3 && highLevel > 0) continue;
-      if (adapter.isClickable(buttons[i][0])) return [buttons[i][0], count, harvBehind];
+      var h = harvesterLevel + (buyWire ? 0 : count);
+      var w = wireDroneLevel + (buyWire ? count : 0);
+      // Post-buy ratio measured against the target, so the natural 1.272
+      // (or 1.45) imbalance never itself reads as disorganization.
+      var ratio = buyWire ? (w + 1) / ((h + 1) * target) : ((h + 1) * target) / (w + 1);
+      if (count > 1 && ratio > DRONE_DISORG_LIMIT && Math.min(h, w) > 0) continue;
+      if (adapter.isClickable(buttons[i][0])) return [buttons[i][0], count, !buyWire];
     }
     return null;
   }
@@ -545,19 +565,35 @@
       // two would ping-pong burning the click budget until yomi caught up.
       var withdrawThreshold = null;
       function considerThreshold(t) { if (t !== null && (withdrawThreshold === null || t < withdrawThreshold)) withdrawThreshold = t; }
+      // Only projects actually ON THE BOARD count. Every projectNN object
+      // exists as a global from load, so testing `project40 && !flag` was
+      // true from t=0 - the bot pulled $500k out of the market for a token
+      // gated behind trust>=85 && clips>=101,000,000, and re-pulled for
+      // each bribe before its button existed. main.js:873 pushes a project
+      // into activeProjects only once trigger() holds, so membership there
+      // is exactly "purchasable once you can pay".
+      function onBoard(id) {
+        var list = g('activeProjects') || [];
+        for (var k = 0; k < list.length; k++) if (list[k] && list[k].id === id) return true;
+        return false;
+      }
       var project37 = g('project37'); // Hostile Takeover, $1,000,000
       var project38 = g('project38'); // Full Monopoly, $10,000,000 + 3,000 yomi (needs project37 first)
       var project40 = g('project40'); // A Token of Goodwill, $500,000
-      var project40b = g('project40b'); // Another Token of Goodwill, doubles from $1,000,000
-      if (project37 && !project37.flag) considerThreshold(1000000);
-      else if (project37 && project37.flag && project38 && !project38.flag && g('yomi') >= 3000) considerThreshold(10000000);
-      if (project40 && !project40.flag) considerThreshold(500000);
+      if (project37 && !project37.flag && onBoard('projectButton37')) considerThreshold(1000000);
+      else if (project37 && project37.flag && project38 && !project38.flag && g('yomi') >= 3000 &&
+               onBoard('projectButton38')) considerThreshold(10000000);
+      if (project40 && !project40.flag && onBoard('projectButton40')) considerThreshold(500000);
       // Another Token of Goodwill is REPEATABLE: its .flag is set forever
       // after the first purchase, so gating on !flag funded exactly one
       // token (diag, RUNS.md: trust sat at 99 for 2,100s with $28B banked
-      // and a $32M bribe pending). While trust < 100, a token is always
-      // the next rung - always consider the current bribe.
-      if (project40 && project40.flag && g('trust') < 100) considerThreshold(g('bribe'));
+      // and a $32M bribe pending). While trust < 100 a token is always the
+      // next rung - but only pull the cash once the button is back on the
+      // board (it's removed on purchase and re-pushed by main.js:873), so
+      // the bribe money keeps earning until it can actually be spent.
+      if (project40 && project40.flag && g('trust') < 100 && onBoard('projectButton40b')) {
+        considerThreshold(g('bribe'));
+      }
       // Routine economy purchases only justify pulling invested money out
       // when their return beats the engine's own compounding rate (the
       // opportunity-cost hurdle) - otherwise the money stays in stocks and
@@ -849,10 +885,31 @@
       // the marginal chip may not repay its escalating ops cost. This is
       // calculable from the waveSeed table + click budget; do the math and
       // possibly cap the generic project rule's chip purchases.
-      if (qActiveCount > 0 && qSum >= qActiveCount * 0.6) {
+      // Only ride when there's something to ride TO. The point of holding
+      // ops above the resting value (memory*1000) is to clear a project
+      // priced above it; with no such project on the board the clicks buy
+      // nothing and cost ~35% of the 30/sec budget that pricing, purchases
+      // and stage work are competing for. Below the resting value the
+      // refill is always worth it (that's just ops regen). At or above it,
+      // require a stretch goal: an unaffordable active project whose ops
+      // price exceeds what we're holding.
+      var restingOps = g('memory') * 1000;
+      var opsNow = g('operations');
+      var worthRiding = opsNow < restingOps;
+      if (!worthRiding) {
+        var boardQ = g('activeProjects') || [];
+        for (var qp = 0; qp < boardQ.length && !worthRiding; qp++) {
+          var pq = boardQ[qp];
+          if (!pq || !pq.element || !pq.element.disabled) continue; // affordable already
+          if (NEVER_TAKE_PROJECTS.indexOf(pq.id) !== -1 || pq.id === ACCEPT_ID) continue;
+          var m = /([\d,]+)\s*ops/i.exec(pq.priceTag || '');
+          if (m && parseFloat(m[1].replace(/,/g, '')) > opsNow) worthRiding = true;
+        }
+      }
+      if (qActiveCount > 0 && qSum >= qActiveCount * 0.6 && worthRiding) {
         return act(adapter, 'btnQcompute', 'quantum',
           'Clicking quantum compute (signal ' + qSum.toFixed(2) + '/' + qActiveCount +
-          ' active chips; ops ride above the memory cap while the flow stays positive).');
+          ' active chips; ' + (opsNow < restingOps ? 'below resting ops' : 'riding above the cap toward an ops-gated project') + ').');
       }
     }
 
@@ -936,13 +993,44 @@
       var fbst = g('factoryBoost') > 1 ? g('factoryBoost') * factoryLevel : 1;
       var clipsPerSec = g('powMod') * fbst * Math.floor(factoryLevel) * g('factoryRate') * 100; // 100 ticks/sec
       var wireBufferSec = clipsPerSec > 0 ? g('wire') / clipsPerSec : Infinity;
+      // Slider semantics (main.js:4116/4149/2763): work multiplier is
+      // (200-sliderPos)/100 and gift rate scales with sliderPos/100, so
+      // 200 is not "100% think" - it is ZERO work, which stops harvesting
+      // and processing dead. Never send it there: MAX_THINK 198 keeps ~1%
+      // of drone output alive, which is enough to keep the matter pipeline
+      // (and the drone-count project triggers below) creeping forward
+      // while gifts still arrive at 99% rate. The 200 setting is exactly
+      // what deadlocked the exodus backlog earlier (run H1).
+      var MAX_THINK = 198;
+      // Drone Flocking (project112) at 50,000 total drones sets droneBoost
+      // = 2, which flips harvest/processing from LINEAR to QUADRATIC in
+      // drone count - at 25k drones each that is a ~50,000x step change in
+      // matter throughput, by far the largest single multiplier in stage 2.
+      // Swarm Computing (project126) at 200 drones unlocks gifts at all.
+      // So while either threshold is close, keep working: think time buys
+      // creativity, but only drones buy the multipliers.
+      // Read via g() rather than the harvesterLevel/wireDroneLevel locals:
+      // those are declared further down in this function, so `var` hoisting
+      // would make them undefined here (the exact shape of an earlier
+      // AUTOCLIPPER_CAP bug - undefined comparisons silently read false).
+      var totalDrones = g('harvesterLevel') + g('wireDroneLevel');
+      // The slider stays on its wire-buffer schedule. A "full work until
+      // 50k drones" override looked right and was self-defeating: drone
+      // PURCHASES are triggered by a draining wire buffer, and it is the
+      // think phases (work multiplier ~0) that drain it - pinning work at
+      // full kept the buffer permanently fat, froze drones at 890/1290 and
+      // so kept the chase flag on forever, with gifts off and memory stuck
+      // at 74. The flocking chase belongs in the purchase rule below, not
+      // here.
       if (swarmFlag === 1) {
-        var desiredSlider = workDone ? 200 // harvest AND backlog finished, think full-time
-          : (computeHungry && !exodus && wireBufferSec > 240) ? 200
+        var desiredSlider = workDone ? MAX_THINK // harvest AND backlog finished
+          : (computeHungry && !exodus && wireBufferSec > 240) ? MAX_THINK
           : (computeHungry && !exodus && wireBufferSec > 60) ? 100 : 0;
         if (Math.abs((g('sliderPos') || 0) - desiredSlider) > 5) {
           return actSetValue(adapter, 'slider', desiredSlider, 'stage2',
-            'Swarm slider -> ' + desiredSlider + ' (' + (desiredSlider > 0 ? 'THINK: gifts toward memory ' + g('memory') + '/125, wire buffer ' + Math.round(wireBufferSec) + 's is fat' : 'WORK: full drone output') + ').');
+            'Swarm slider -> ' + desiredSlider + ' (' + (desiredSlider > 0
+              ? 'THINK: gifts toward memory ' + g('memory') + '/125, wire buffer ' + Math.round(wireBufferSec) + 's is fat'
+              : 'WORK: full drone output') + ').');
         }
       }
 
@@ -988,12 +1076,24 @@
       // so >=1,000 batteries, charged by farm SURPLUS - start building the
       // bank once the factory economy is established (or immediately in
       // exodus), never before the first few factories exist.
+      // Capacity is batteryLevel * batterySize (10,000), so the 10,000,000
+      // MW-s Space Exploration needs means >= 1,000 towers. Two triggers,
+      // not one: the ordinary build-out, AND a full-bank override -
+      // updatePower() discards surplus once storedPower hits cap, so a
+      // bank sitting full below 10M capacity is burning the charge window
+      // (the factoryLevel>=10 gate alone could hold that state for
+      // minutes). Whenever the bank is topped out and capacity is short,
+      // buying towers is strictly the right move.
       var batteryTarget = 1000;
-      if ((exodus || factoryLevel >= 10) && batteryLevel < batteryTarget) {
+      var bankCapacity = batteryLevel * 10000;
+      var bankFull = bankCapacity > 0 && g('storedPower') >= bankCapacity * 0.98;
+      if (batteryLevel < batteryTarget && (exodus || factoryLevel >= 10 || bankFull)) {
         var batPick = biggestAffordable(adapter, [['btnBatteryx100', 100], ['btnBatteryx10', 10], ['btnMakeBattery', 1]]);
         if (batPick) {
           return act(adapter, batPick[0], 'stage2',
-            'Adding ' + batPick[1] + ' Battery Tower(s) (' + batteryLevel + '/' + batteryTarget + ' toward the 10M MW-s Space Exploration bank).');
+            'Adding ' + batPick[1] + ' Battery Tower(s) (' + batteryLevel + '/' + batteryTarget +
+            (bankFull ? '; bank FULL at ' + Math.round(bankCapacity / 1e6) + 'M cap - surplus being discarded' : '') +
+            ' toward the 10M MW-s Space Exploration bank).');
         }
       }
       // Charging: storedPower fills at (supply - demand) per tick, so a
@@ -1052,6 +1152,12 @@
           'Buying a Factory (wire buffer ' + (wireBufferSec === Infinity ? 'inf' : Math.round(wireBufferSec) + 's') +
           ' > 600s - conversion falling behind' + (nearSE ? '; SE reserve protected' : '') + ').');
       }
+      // A "flocking chase" (buying drones toward project112's 50,000-drone
+      // droneBoost=2 on the post-factory surplus) was tried and REVERTED:
+      // 6-seed median 14,143s vs 13,203s without, Earth consumed ~1,400s
+      // later. The clips it diverted from factories cost more than the
+      // multiplier returned, because the ratio-correct drone economy
+      // reaches flocking on its own well before Earth runs out anyway.
       return wait('stage2', 'Accumulating unusedClips (factory ' +
         Math.round(100 * g('unusedClips') / g('factoryCost')) + '% funded; wire buffer ' +
         (wireBufferSec === Infinity ? 'inf' : Math.round(wireBufferSec) + 's').toString() +

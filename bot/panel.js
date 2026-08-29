@@ -51,6 +51,38 @@
   });
   updateToggleButton();
 
+  // Reset: wipe every saved key and reload. The game autosaves on a timer
+  // (main.js:4981-4985) and restores at load (4176-4180), so clearing must
+  // happen immediately before the reload or the next autosave rewrites it -
+  // hence no confirm() dialog in between, just a two-click arm. Keys cover
+  // the base save plus both alternate slots and the prestige record.
+  var resetEl = document.getElementById('botReset');
+  if (resetEl) {
+    var resetArmed = false;
+    resetEl.addEventListener('click', function () {
+      if (!resetArmed) {
+        resetArmed = true;
+        resetEl.textContent = 'Sure?';
+        resetEl.className = 'armed';
+        setTimeout(function () {
+          resetArmed = false;
+          resetEl.textContent = 'Reset';
+          resetEl.className = '';
+        }, 3000);
+        return;
+      }
+      running = false; // stop the bot clicking into a half-wiped game
+      var bases = ['saveGame', 'saveProjectsUses', 'saveProjectsFlags', 'saveProjectsActive', 'saveStratsActive'];
+      for (var i = 0; i < bases.length; i++) {
+        localStorage.removeItem(bases[i]);
+        localStorage.removeItem(bases[i] + '1');
+        localStorage.removeItem(bases[i] + '2');
+      }
+      localStorage.removeItem('savePrestige');
+      location.reload();
+    });
+  }
+
   if (speedEl) {
     if (timeWarp) {
       speedEl.addEventListener('change', function () {
