@@ -705,8 +705,28 @@
     // Rate-limited to 1/sec: stockShop() only converts bankroll to stocks
     // on a 1,000ms timer (main.js:1666), so faster sweeping adds zero
     // compounding while eating the 30 clicks/sec budget that quantum
-    // hammering (step 11) now puts to work.
-    if (humanFlag === 1 && !wireShortage && adapter.isClickable('btnInvest') && g('funds') > 0 &&
+    // hammering (step 12) now puts to work.
+    //
+    // And never sweep while the WireBuyer might need the cash. Its auto-buy
+    // fires only at wire<=1 (main.js:4241) and buyWire() silently no-ops
+    // when funds < wireCost (main.js:722-723), so a sweep landing just
+    // before that check stops clip production outright until income
+    // rebuilds - measured at 14-19% of stage-1 ticks sitting below
+    // wireCost. investDeposit() is all-or-nothing (no partial deposit), so
+    // the only lever is WHEN to sweep - and the test has to be economic,
+    // not temporal: at 100k clips/sec even a 100k-inch buffer is one
+    // second, so "hold while wire is low" holds forever and leaves the
+    // bankroll idle. Instead compare the float against the WIRE BURN RATE
+    // (each purchase buys wireSupply inches, consumed at clipRate/sec, so
+    // spend/sec = clipRate/wireSupply * wireCost) and keep ~10 seconds of
+    // it liquid. Self-regulating: when income dwarfs wire costs the float
+    // is trivially covered and sweeping continues at 1/sec; when wire is
+    // expensive relative to income, the money stays where it's needed.
+    var wireSupplyNow = Math.max(g('wireSupply') || 1, 1);
+    var wireSpendPerSec = (g('clipRate') || 0) / wireSupplyNow * g('wireCost');
+    var holdForWireBuyer = wireBuyerActive && g('funds') < wireSpendPerSec * 10;
+    if (humanFlag === 1 && !wireShortage && !holdForWireBuyer &&
+        adapter.isClickable('btnInvest') && g('funds') > 0 &&
         (adapter.__lastDepositAt === undefined || adapter.now() - adapter.__lastDepositAt >= 1000)) {
       adapter.__lastDepositAt = adapter.now();
       return act(adapter, 'btnInvest', 'invest',
@@ -1291,8 +1311,19 @@
           'Buying probe trust just-in-time for ' + nextStat[0] + ' (' + g('probeTrust') + '/' + g('maxTrust') +
           '; drift ~ trust^1.2, never bank it).');
       }
-      if (adapter.isClickable('btnMakeProbe')) {
-        return act(adapter, 'btnMakeProbe', 'stage3', 'Launching a probe (replication does the real scaling).');
+      // Manual launches are a bootstrap only. spawnProbes() adds
+      // probeCount * probeRepBaseRate(0.00005) * probeRep per TICK - i.e.
+      // probeCount * probeRep * 0.005 per second - while a click adds
+      // exactly 1 and the whole budget is 30 clicks/sec shared with the
+      // stat plan, honor ladder and quantum ride. Once the fleet
+      // out-reproduces what clicking could ever contribute, every launch
+      // is a rounding error paid for in click budget, so stop: the same
+      // unusedClips get spent by spawnProbes at the same price anyway.
+      var selfSpawnPerSec = g('probeCount') * (g('probeRep') || 0) * 0.005;
+      if (selfSpawnPerSec < 30 && adapter.isClickable('btnMakeProbe')) {
+        return act(adapter, 'btnMakeProbe', 'stage3',
+          'Launching a probe (bootstrap: fleet self-spawn is only ' + selfSpawnPerSec.toFixed(1) +
+          '/s, below the 30/s click budget).');
       }
     }
 

@@ -294,3 +294,30 @@ was tried and **reverted**: median 14,143s vs 13,203s without it.
 **6-seed medians: 13,060 / 13,105 / 13,220 / 13,279 / 13,305 / 13,386 → ≈ 13,250s**
 (2.34x WR, previous best 13,724s). Splits (seed 1): stage 1 5,873 · buildout 2,753 ·
 exodus 399 · stage 3 4,088 · endgame 107.
+
+### AE/AF — WireBuyer float, probe-launch cutoff, panel clock freeze
+
+**Deposit cadence was already correct** (measured: exactly 1.00/s in steady state,
+the `__lastDepositAt` guard added earlier), but the user's underlying read was
+right — sweeping *starves the WireBuyer*. Its auto-buy fires only at `wire<=1`
+(main.js:4241) and `buyWire()` silently no-ops when `funds < wireCost`
+(main.js:722), so a sweep landing just before that check stops clip production
+until income rebuilds. Measured **2-4% of stage-1 ticks were genuinely blocked
+buys** (an initial `funds < wireCost` proxy read 14-19%, but most of those ticks
+had plenty of wire and no pending purchase — worth measuring the real event).
+
+`investDeposit()` is all-or-nothing, so the only lever is *when* to sweep, and the
+test has to be economic rather than temporal: at 100k clips/sec even a 100k-inch
+buffer is one second, so "hold while wire is low" holds forever (first attempt left
+$321k idle with 1 deposit in the whole run). Final rule keeps ~10 seconds of the
+**wire burn rate** (`clipRate/wireSupply * wireCost`) liquid — self-regulating,
+since the float is trivial once income dwarfs wire costs. **Median 13,250 → 13,107s.**
+
+Also: manual probe launches now stop once fleet self-replication
+(`probeCount * probeRep * 0.005`/s) exceeds the entire 30/s click budget — past
+that a launch adds 1 probe to a fleet gaining thousands per second, for the same
+unusedClips spawnProbes would spend anyway. Neutral on the clock (13,153s median,
+inside seed noise) but returns the budget to the stat plan and honor ladder.
+
+Panel: the clock now freezes at `dismantle>=4 && finalClips>=100` (the headless
+runner's finish condition) and reports the final time instead of counting forever.
