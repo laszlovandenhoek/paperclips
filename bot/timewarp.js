@@ -35,6 +35,19 @@
   };
   window.clearInterval = function (id) { delete timers[id]; };
 
+  // setTimeout must be virtualized too, not just setInterval: the strategy
+  // tournament's round loop is a setTimeout chain (main.js:2283/2299,
+  // clearGrid/roundLoop at 50ms), so leaving it on the native clock meant
+  // tournaments ran at 1x while the rest of the game was fast-forwarded -
+  // yomi income silently fell behind everything else at high speeds.
+  window.setTimeout = function (fn, ms) {
+    var delay = Math.max(Number(ms) || 0, 1);
+    var id = nextId++;
+    timers[id] = { fn: fn, period: delay, due: virtualNow + delay, once: true };
+    return id;
+  };
+  window.clearTimeout = function (id) { delete timers[id]; };
+
   var lastReal = performance.now();
   realSetInterval(function () {
     var nowReal = performance.now();
@@ -59,7 +72,7 @@
       if (bestId === null || bestDue > target) break;
       var t = timers[bestId];
       virtualNow = bestDue;
-      t.due += t.period;
+      if (t.once) delete timers[bestId]; else t.due += t.period;
       try { t.fn(); } catch (e) {
         // A throwing game callback shouldn't kill the whole scheduler
         // (native setInterval survives exceptions too).
